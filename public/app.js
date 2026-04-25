@@ -248,6 +248,16 @@ generateBtn.addEventListener('click', generate);
 promptInput.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') generate();
 });
+// Allow Ctrl/Cmd+Enter from anywhere (e.g., slot textareas) to trigger generate
+window.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        const t = e.target;
+        if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT') && t !== promptInput) {
+            e.preventDefault();
+            generate();
+        }
+    }
+});
 
 // ============ Gallery ============
 async function loadGallery() {
@@ -414,21 +424,27 @@ function renderSlots(order) {
         const val = state.slotValues[name] ?? def;
         if (val !== def) chip.classList.add('dirty');
         chip.innerHTML = `<span class="slot-name">${escapeHtml(name)}</span>`;
-        const input = document.createElement('input');
-        input.type = 'text';
+        const input = document.createElement('textarea');
+        input.rows = 1;
         input.value = val;
         input.placeholder = def || '(empty)';
-        // Auto-size
-        const sizeFor = (s) => Math.max(6, Math.min(40, s.length + 1));
-        input.size = sizeFor(val);
+        input.spellcheck = false;
+        // Auto-grow vertically; width is 100% via CSS
+        const autosize = () => {
+            input.style.height = 'auto';
+            input.style.height = input.scrollHeight + 'px';
+        };
         input.addEventListener('input', () => {
             state.slotValues[name] = input.value;
-            input.size = sizeFor(input.value);
+            autosize();
             chip.classList.toggle('dirty', input.value !== def);
             renderCompiledPreview();
         });
+        // Allow Enter for newline; Ctrl/Cmd+Enter still triggers generate via window listener
         chip.appendChild(input);
         slotsList.appendChild(chip);
+        // Defer initial sizing until in DOM so scrollHeight is accurate
+        requestAnimationFrame(autosize);
     });
 }
 
