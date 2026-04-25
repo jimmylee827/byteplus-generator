@@ -381,8 +381,10 @@ function parseSlots(template) {
 
 function compilePrompt(template) {
     return template.replace(SLOT_RE, (_match, name) => {
+        // Empty string means "intentionally empty" — only fall back to the default
+        // when the user has never touched this slot (value is undefined).
         const v = state.slotValues[name];
-        return (v !== undefined && v !== '') ? v : (state.slotDefaults[name] || '');
+        return v !== undefined ? v : (state.slotDefaults[name] || '');
     });
 }
 
@@ -440,8 +442,29 @@ function renderSlots(order) {
             chip.classList.toggle('dirty', input.value !== def);
             renderCompiledPreview();
         });
-        // Allow Enter for newline; Ctrl/Cmd+Enter still triggers generate via window listener
         chip.appendChild(input);
+
+        // Per-chip "restore default" button (only meaningful when a default exists)
+        if (def) {
+            const restore = document.createElement('button');
+            restore.type = 'button';
+            restore.className = 'slot-restore';
+            restore.title = `Restore default: ${def}`;
+            restore.setAttribute('aria-label', `Restore default for ${name}`);
+            restore.textContent = '↻';
+            restore.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                input.value = def;
+                state.slotValues[name] = def;
+                chip.classList.remove('dirty');
+                autosize();
+                renderCompiledPreview();
+                input.focus();
+            });
+            chip.appendChild(restore);
+        }
+
         slotsList.appendChild(chip);
         // Defer initial sizing until in DOM so scrollHeight is accurate
         requestAnimationFrame(autosize);
@@ -459,7 +482,9 @@ function renderCompiledPreview() {
     while ((m = SLOT_RE.exec(template)) !== null) {
         html += escapeHtml(template.slice(lastIdx, m.index));
         const name = m[1];
-        const v = state.slotValues[name] ?? state.slotDefaults[name] ?? '';
+        const v = state.slotValues[name] !== undefined
+            ? state.slotValues[name]
+            : (state.slotDefaults[name] || '');
         html += `<span class="filled">${escapeHtml(v)}</span>`;
         lastIdx = m.index + m[0].length;
     }

@@ -479,6 +479,30 @@ textarea:focus, input:focus, select:focus {
 }
 .slot-chip textarea:focus { outline: none; box-shadow: none; }
 .slot-chip.dirty { border-color: var(--warning); }
+.slot-restore {
+    flex: 0 0 auto;
+    align-self: flex-start;
+    margin-top: 2px;
+    width: 24px; height: 24px;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    background: var(--bg-elev);
+    color: var(--text-mute);
+    font-size: 14px;
+    line-height: 1;
+    display: inline-flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    opacity: 0;
+    transition: var(--transition);
+}
+.slot-chip:hover .slot-restore,
+.slot-chip:focus-within .slot-restore,
+.slot-chip.dirty .slot-restore { opacity: 1; }
+.slot-restore:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: var(--accent-soft);
+}
 .compiled-preview {
     background: var(--bg-card);
     border: 1px solid var(--border);
