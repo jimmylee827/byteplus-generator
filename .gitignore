@@ -1,7 +1,22 @@
+# Dependencies
 node_modules/
+
+# Environment / secrets
 .env
-*.log
-.DS_Store
+.env.local
+.env.*.local
+
+# Generated user content (kept local, never published)
 gallery/
 prompts/
+
+# Scratch / debug artifacts
 body.json
+*.log
+*.tmp
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
