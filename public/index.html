@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Seedream Studio</title>
+    <link rel="stylesheet" href="/styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+    <header class="topbar">
+        <div class="brand">
+            <div class="brand-mark"></div>
+            <div>
+                <h1>Seedream Studio</h1>
+                <p class="brand-sub">BytePlus 4.5 · multi-image generation</p>
+            </div>
+        </div>
+        <div class="status" id="statusPill">
+            <span class="dot"></span><span id="statusText">checking…</span>
+        </div>
+    </header>
+
+    <main class="layout">
+        <!-- LEFT: Composer -->
+        <section class="composer card">
+            <h2>Compose</h2>
+
+            <label class="field-label">Reference images <span class="hint">(0–9, optional)</span></label>
+            <div id="dropZone" class="dropzone" tabindex="0">
+                <input type="file" id="fileInput" accept="image/*" multiple hidden>
+                <div class="dropzone-inner">
+                    <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 16V4M12 4l-4 4M12 4l4 4"/><path d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+                    <p><strong>Drop images here</strong>, paste, or <button type="button" class="link" id="browseBtn">browse</button></p>
+                    <p class="hint">PNG · JPG · WEBP · up to 10 MB each</p>
+                </div>
+            </div>
+            <div id="thumbStrip" class="thumb-strip"></div>
+
+            <label class="field-label" for="promptInput">Prompt</label>
+            <textarea id="promptInput" rows="4" placeholder="A vibrant editorial portrait of a woman in a sculptural hat, dramatic studio lighting, Vogue cover, sharp focus, shallow depth of field…"></textarea>
+
+            <div id="slotsRow" class="slots-row hidden">
+                <div class="slots-header">
+                    <span>Variables <span class="hint" id="slotsHint"></span></span>
+                    <button type="button" class="link" id="resetSlotsBtn">Reset to defaults</button>
+                </div>
+                <div id="slotsList" class="slots-list"></div>
+                <div class="compiled-preview">
+                    <div class="hint">Compiled prompt</div>
+                    <div id="compiledPreview"></div>
+                </div>
+            </div>
+
+            <div class="row">
+                <div class="control">
+                    <label for="resolutionSelect">Resolution</label>
+                    <select id="resolutionSelect">
+                        <option value="2K">2K</option>
+                        <option value="4K" selected>4K</option>
+                    </select>
+                </div>
+                <div class="control">
+                    <label for="ratioSelect">Aspect ratio</label>
+                    <select id="ratioSelect">
+                        <option value="auto">Auto (let model decide)</option>
+                        <option value="1:1">1:1 Square</option>
+                        <option value="4:3">4:3 Landscape</option>
+                        <option value="3:4">3:4 Portrait</option>
+                        <option value="16:9" selected>16:9 Wide</option>
+                        <option value="9:16">9:16 Tall</option>
+                        <option value="3:2">3:2</option>
+                        <option value="2:3">2:3</option>
+                        <option value="21:9">21:9 Cinema</option>
+                    </select>
+                </div>
+                <div class="control toggle">
+                    <label for="watermarkToggle">Watermark</label>
+                    <label class="switch">
+                        <input type="checkbox" id="watermarkToggle">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="composer-actions">
+                <button id="libraryBtn" class="ghost-btn" type="button">📚 Library</button>
+                <button id="saveToLibBtn" class="ghost-btn" type="button">＋ Save to library</button>
+            </div>
+
+            <button id="generateBtn" class="primary-btn">
+                <span>Generate</span>
+                <kbd>Ctrl</kbd><kbd>↵</kbd>
+            </button>
+            <div id="activePromptBadge" class="active-prompt-badge hidden">
+                <span>Editing: <strong id="activePromptTitle"></strong> <span class="hint" id="activePromptVer"></span></span>
+                <button type="button" class="link" id="detachPromptBtn">Detach</button>
+            </div>
+        </section>
+
+        <!-- RIGHT: Pool & Gallery -->
+        <section class="pool-wrap">
+            <div class="pool-header">
+                <h2>Workspace</h2>
+                <div class="pool-tools">
+                    <input id="searchInput" type="search" placeholder="Search prompts…">
+                    <button id="refreshBtn" class="icon-btn" title="Refresh">↻</button>
+                </div>
+            </div>
+
+            <div id="processingPool" class="processing-pool"></div>
+
+            <h3 class="gallery-title">Gallery <span id="galleryCount" class="hint">0</span></h3>
+            <div id="gallery" class="gallery"></div>
+            <div id="galleryEmpty" class="empty-state hidden">
+                <p>No images yet. Generate your first masterpiece →</p>
+            </div>
+        </section>
+    </main>
+
+    <!-- Lightbox modal -->
+    <div id="lightbox" class="lightbox hidden">
+        <div class="lightbox-backdrop"></div>
+        <div class="lightbox-content">
+            <button class="lightbox-close" id="lightboxClose">×</button>
+            <div class="lightbox-image-wrap">
+                <img id="lightboxImg" src="" alt="">
+            </div>
+            <aside class="lightbox-meta">
+                <h3>Details</h3>
+                <dl>
+                    <dt>Prompt</dt><dd id="lbPrompt"></dd>
+                    <dt>Size</dt><dd id="lbSize"></dd>
+                    <dt>Aspect</dt><dd id="lbRatio"></dd>
+                    <dt>Created</dt><dd id="lbCreated"></dd>
+                    <dt>Inputs</dt><dd id="lbInputs"></dd>
+                </dl>
+                <div class="lightbox-actions">
+                    <button id="lbCopyPrompt" class="ghost-btn">Copy prompt</button>
+                    <a id="lbDownload" class="ghost-btn" download>Download</a>
+                    <button id="lbDelete" class="danger-btn">Delete</button>
+                </div>
+            </aside>
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <!-- Library drawer -->
+    <aside id="libraryDrawer" class="drawer hidden" aria-hidden="true">
+        <div class="drawer-backdrop"></div>
+        <div class="drawer-panel">
+            <header class="drawer-head">
+                <h2>Prompt Library</h2>
+                <div class="drawer-tools">
+                    <input id="libSearch" type="search" placeholder="Search…">
+                    <button id="libNewBtn" class="ghost-btn">＋ New</button>
+                    <button id="libCloseBtn" class="icon-btn" title="Close">×</button>
+                </div>
+            </header>
+            <div id="libList" class="lib-list"></div>
+            <div id="libEmpty" class="empty-state hidden"><p>No prompts yet. Save your first one →</p></div>
+        </div>
+    </aside>
+
+    <!-- Library editor modal -->
+    <div id="libEditor" class="lightbox hidden">
+        <div class="lightbox-backdrop"></div>
+        <div class="lightbox-content lib-editor-content">
+            <button class="lightbox-close" id="libEditorClose">×</button>
+            <div class="lib-editor-body">
+                <h3 id="libEditorTitle">New prompt</h3>
+                <label class="field-label">Title</label>
+                <input type="text" id="libTitleInput" placeholder="e.g., Cyberpunk City Sketch">
+
+                <label class="field-label">Body <span class="hint">use <code>{{name:default}}</code> for variables</span></label>
+                <textarea id="libBodyInput" rows="10" placeholder="A {{style:cyberpunk}} city at {{time:sunset}}, {{detail:ultra detailed 4K}}"></textarea>
+
+                <div id="libVersionRow" class="lib-version-row hidden">
+                    <label class="field-label">Version history</label>
+                    <select id="libVersionSelect"></select>
+                    <button id="libRestoreBtn" class="ghost-btn" type="button">Restore as new version</button>
+                </div>
+
+                <div class="lib-editor-actions">
+                    <button id="libDeleteBtn" class="danger-btn hidden" type="button">Delete</button>
+                    <span class="spacer"></span>
+                    <button id="libCancelBtn" class="ghost-btn" type="button">Cancel</button>
+                    <button id="libSaveBtn" class="primary-btn lib-save" type="button">Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/app.js"></script>
+    <script src="/library.js"></script>
+</body>
+</html>
