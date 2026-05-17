@@ -147,6 +147,10 @@ function nextGalleryId(date = new Date()) {
 
 // --- EXPRESS SETUP ---
 const app = express();
+app.use((_req, res, next) => {
+    res.setHeader('Alt-Svc', 'clear');
+    next();
+});
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.static(PUBLIC_DIR));
@@ -177,7 +181,7 @@ app.get('/api/health', (_req, res) => {
 });
 
 app.post('/api/generate', upload.array('images', 9), async (req, res) => {
-    const { prompt, size, watermark } = req.body;
+    const { prompt, size, watermark } = req.body || {};
     if (!prompt || !prompt.trim()) {
         return res.status(400).json({ success: false, error: 'Prompt is required.' });
     }
