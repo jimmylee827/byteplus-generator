@@ -49,8 +49,13 @@ ENDPOINT_ID=ep-XXXXXXXXXXXXXX
 # Comma-separated list of BytePlus API keys (the server rotates between them)
 BYTEPLUS_API_KEYS=key_one,key_two,key_three
 
-# Optional — the auto tunnel sets this for you on startup. Only set it manually
-# alongside AUTO_TUNNEL=0 (e.g. a stable named tunnel).
+# Optional — a named tunnel on your own domain. Recommended for clips over ~10 MB;
+# the server takes its public address from the tunnel, so PUBLIC_BASE_URL is unused.
+# TUNNEL_NAME=byteplus-studio
+# TUNNEL_HOSTNAME=byteplus.yourdomain.com
+
+# Optional — the quick tunnel writes this for you on startup. Set it by hand only
+# alongside AUTO_TUNNEL=0, when you manage the address yourself.
 # AUTO_TUNNEL=0
 # PUBLIC_BASE_URL=https://your-tunnel-hostname
 
@@ -201,11 +206,13 @@ The script is idempotent, sorts by `createdAt` for stable collision suffixes, re
 | Variable             | Required | Description                                                |
 | -------------------- | -------- | ---------------------------------------------------------- |
 | `ENDPOINT_ID`        | yes      | Your Seedream 4.5 endpoint (e.g., `ep-...`). Used for the default "endpoint" image-model option. |
-| `BYTEPLUS_API_KEYS`  | yes      | Comma-separated list of ARK API keys. Order is the rotation order. Shared by image generation **and** Seedance video editing. |
-| `VIDEO_MODEL`        | no       | Seedance model ID for the Video editing tab (default `dreamina-seedance-2-5-260628`). |
-| `PUBLIC_BASE_URL`    | no       | Public address of this server. **Set automatically by the auto tunnel**; only provide it yourself with `AUTO_TUNNEL=0`. |
+| `BYTEPLUS_API_KEYS`  | yes      | Comma-separated list of ARK API keys. Order is the rotation order. Shared by image generation **and** Seedance video generation. |
+| `VIDEO_MODEL`        | no       | Seedance model ID for the Video tab (default `dreamina-seedance-2-5-260628`). |
+| `TUNNEL_NAME`        | no       | Name of a cloudflared **named tunnel** to run instead of a quick tunnel. Requires `TUNNEL_HOSTNAME`. |
+| `TUNNEL_HOSTNAME`    | no       | The fixed hostname that named tunnel resolves to. The server uses it as its public address, so `PUBLIC_BASE_URL` is ignored in this mode. |
+| `PUBLIC_BASE_URL`    | no       | Public address of this server. **Written automatically by the quick tunnel**, and ignored when a named tunnel is configured; set it yourself only with `AUTO_TUNNEL=0`. |
 | `AUTO_TUNNEL`        | no       | `0` disables the built-in cloudflared supervisor (default on). Use with your own `PUBLIC_BASE_URL`. |
-| `VIDEO_UPLOAD_LIMIT_MB` | no    | Max size of an uploaded reference clip (default `200`).    |
+| `VIDEO_UPLOAD_LIMIT_MB` | no    | Max size of any single file uploaded in the Video tab — reference clip or frame image (default `200`). |
 | `PORT`               | no       | HTTP port (default `3000`).                                |
 
 ### Video uploads and the auto tunnel

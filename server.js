@@ -50,7 +50,9 @@ const videoEnabled = apiKeys.length > 0;
 // refused up front with an actionable message and only pasted URLs work.
 // A quick tunnel's hostname ROTATES, so this can't be a boot-time constant: it's
 // read live on every request. AUTO_TUNNEL=0 disables the supervisor and pins the
-// value to whatever .env holds (use that for a stable/named tunnel).
+// value to whatever .env holds — the only mode where PUBLIC_BASE_URL is yours to
+// set by hand. A named tunnel does NOT need it: TUNNEL_NAME/TUNNEL_HOSTNAME keep
+// the supervisor on and it reports the fixed hostname itself.
 let publicBaseUrl = (process.env.PUBLIC_BASE_URL || '').trim().replace(/\/+$/, '');
 const AUTO_TUNNEL = process.env.AUTO_TUNNEL !== '0' && process.env.AUTO_TUNNEL !== 'false';
 function getPublicBaseUrl() { return publicBaseUrl; }
