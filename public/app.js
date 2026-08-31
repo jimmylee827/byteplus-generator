@@ -1,24 +1,52 @@
 // ============ Constants ============
-const SIZE_MATRIX = {
-    '2K': {
-        '1:1': '2048x2048',
-        '4:3': '2304x1728',
-        '3:4': '1728x2304',
-        '16:9': '2848x1600',
-        '9:16': '1600x2848',
-        '3:2': '2496x1664',
-        '2:3': '1664x2496',
-        '21:9': '3136x1344'
+// Per-model image configuration. The "endpoint" model resolves to the Seedream
+// endpoint ID configured on the server (.env ENDPOINT_ID); every other entry is a
+// ModelArk model ID forwarded verbatim. Resolutions and exact pixel dimensions
+// differ between models (e.g. 5.0 Pro tops out at 2K, 4.5 reaches 4K), so the
+// matrix is keyed per model.
+const SEEDREAM_MODELS = {
+    endpoint: {
+        label: 'Seedream 4.5 (endpoint)',
+        resolutions: ['2K', '4K'],
+        defaultResolution: '4K',
+        // outputFormat null → let the endpoint default (jpeg)
+        outputFormat: null,
+        matrix: {
+            '2K': {
+                '1:1': '2048x2048', '4:3': '2304x1728', '3:4': '1728x2304',
+                '16:9': '2848x1600', '9:16': '1600x2848', '3:2': '2496x1664',
+                '2:3': '1664x2496', '21:9': '3136x1344'
+            },
+            '4K': {
+                '1:1': '4096x4096', '4:3': '4704x3520', '3:4': '3520x4704',
+                '16:9': '5504x3040', '9:16': '3040x5504', '3:2': '4992x3328',
+                '2:3': '3328x4992', '21:9': '6240x2656'
+            }
+        }
     },
-    '4K': {
-        '1:1': '4096x4096',
-        '4:3': '4704x3520',
-        '3:4': '3520x4704',
-        '16:9': '5504x3040',
-        '9:16': '3040x5504',
-        '3:2': '4992x3328',
-        '2:3': '3328x4992',
-        '21:9': '6240x2656'
+    'dola-seedream-5-0-pro-260628': {
+        label: 'Seedream 5.0 Pro',
+        resolutions: ['1K', '1.5K', '2K'],
+        defaultResolution: '2K',
+        // 5.0 Pro supports png & jpeg; pin jpeg so gallery files stay consistent.
+        outputFormat: 'jpeg',
+        matrix: {
+            '1K': {
+                '1:1': '1024x1024', '4:3': '1152x864', '3:4': '864x1152',
+                '16:9': '1424x800', '9:16': '800x1424', '3:2': '1248x832',
+                '2:3': '832x1248', '21:9': '1568x672'
+            },
+            '1.5K': {
+                '1:1': '1536x1536', '4:3': '1792x1344', '3:4': '1344x1792',
+                '16:9': '2048x1152', '9:16': '1152x2048', '3:2': '1872x1248',
+                '2:3': '1248x1872', '21:9': '2352x1008'
+            },
+            '2K': {
+                '1:1': '2048x2048', '4:3': '2368x1776', '3:4': '1776x2368',
+                '16:9': '2816x1584', '9:16': '1584x2816', '3:2': '2496x1664',
+                '2:3': '1664x2496', '21:9': '3136x1344'
+            }
+        }
     }
 };
 
@@ -29,7 +57,9 @@ const state = {
     searchTerm: '',
     slotValues: {},   // { name: currentValue }
     slotDefaults: {}, // { name: defaultValue }
-    activePrompt: null // { id, title, currentVersion } when editing a saved prompt
+    activePrompt: null, // { id, title, currentVersion } when editing a saved prompt
+    videoEnabled: false,
+    videoUploadsEnabled: false
 };
 
 // ============ DOM refs ============
@@ -42,6 +72,8 @@ const promptInput = $('promptInput');
 const resolutionSelect = $('resolutionSelect');
 const ratioSelect = $('ratioSelect');
 const watermarkToggle = $('watermarkToggle');
+const modelSelect = $('modelSelect');
+const tabStrip = $('tabStrip');
 const generateBtn = $('generateBtn');
 const processingPool = $('processingPool');
 const gallery = $('gallery');
@@ -52,6 +84,7 @@ const refreshBtn = $('refreshBtn');
 const lightbox = $('lightbox');
 const lightboxImg = $('lightboxImg');
 const lbPrompt = $('lbPrompt');
+const lbModel = $('lbModel');
 const lbSize = $('lbSize');
 const lbRatio = $('lbRatio');
 const lbCreated = $('lbCreated');
@@ -92,12 +125,56 @@ async function checkHealth() {
             statusPill.classList.add('ok');
             statusPill.classList.remove('err');
             statusText.textContent = `${d.activeKeys}/${d.totalKeys} keys`;
+            state.videoEnabled = !!d.videoEnabled;
+            state.videoUploadsEnabled = !!d.videoUploadsEnabled;
+            updateVideoTab();
         } else throw new Error('not ok');
     } catch {
         statusPill.classList.add('err');
         statusText.textContent = 'offline';
+        state.videoEnabled = false;
+        state.videoUploadsEnabled = false;
+        updateVideoTab();
     }
 }
+
+// Reflect video availability on the tab + notice.
+function updateVideoTab() {
+    const tab = $('videoTab');
+    const notice = $('vidDisabledNotice');
+    const view = $('videoView');
+    if (state.videoEnabled) {
+        tab.classList.remove('disabled');
+        tab.disabled = false;
+        notice.classList.add('hidden');
+    } else {
+        tab.classList.add('disabled');
+        tab.disabled = false; // still clickable so the user can see the notice
+        if (!view.classList.contains('hidden')) notice.classList.remove('hidden');
+    }
+    if (window.VideoUI?.onAvailability) window.VideoUI.onAvailability(state.videoEnabled);
+    if (window.VideoUI?.onUploadsAvailability) window.VideoUI.onUploadsAvailability(state.videoUploadsEnabled);
+}
+
+// ============ Tab switching ============
+function switchTab(name) {
+    const image = $('imageView');
+    const video = $('videoView');
+    [...tabStrip.children].forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+    if (name === 'video') {
+        image.classList.add('hidden');
+        video.classList.remove('hidden');
+        $('vidDisabledNotice').classList.toggle('hidden', state.videoEnabled);
+        window.VideoUI?.onShow?.();
+    } else {
+        image.classList.remove('hidden');
+        video.classList.add('hidden');
+    }
+}
+tabStrip.addEventListener('click', (e) => {
+    const btn = e.target.closest('.tab');
+    if (btn && !btn.classList.contains('active')) switchTab(btn.dataset.tab);
+});
 
 // ============ File handling ============
 function addFiles(fileList) {
@@ -176,11 +253,42 @@ window.addEventListener('paste', (e) => {
 });
 
 // ============ Generation ============
+function currentModelKey() { return modelSelect.value || 'endpoint'; }
+function currentModelCfg() { return SEEDREAM_MODELS[currentModelKey()] || SEEDREAM_MODELS.endpoint; }
+
+// Populate the resolution dropdown for the selected model, preserving the current
+// choice when it is still valid and falling back to the model default otherwise.
+function syncResolutionOptions() {
+    const cfg = currentModelCfg();
+    const prev = resolutionSelect.value;
+    resolutionSelect.innerHTML = '';
+    cfg.resolutions.forEach(r => {
+        const opt = document.createElement('option');
+        opt.value = r; opt.textContent = r;
+        resolutionSelect.appendChild(opt);
+    });
+    resolutionSelect.value = cfg.resolutions.includes(prev) ? prev : cfg.defaultResolution;
+}
+
+function populateModels() {
+    modelSelect.innerHTML = '';
+    Object.entries(SEEDREAM_MODELS).forEach(([key, cfg]) => {
+        const opt = document.createElement('option');
+        opt.value = key; opt.textContent = cfg.label;
+        modelSelect.appendChild(opt);
+    });
+    // Default to the configured endpoint (keeps existing behaviour).
+    modelSelect.value = 'endpoint';
+    syncResolutionOptions();
+}
+modelSelect.addEventListener('change', syncResolutionOptions);
+
 function buildSize() {
+    const cfg = currentModelCfg();
     const res = resolutionSelect.value;
     const ratio = ratioSelect.value;
     if (ratio === 'auto') return res;
-    return SIZE_MATRIX[res]?.[ratio] || res;
+    return cfg.matrix[res]?.[ratio] || res;
 }
 
 function makeJobCard(jobId, prompt) {
@@ -220,7 +328,10 @@ async function generate() {
 
     const fd = new FormData();
     fd.append('prompt', prompt);
+    fd.append('model', currentModelKey());
     fd.append('size', buildSize());
+    const outFmt = currentModelCfg().outputFormat;
+    if (outFmt) fd.append('output_format', outFmt);
     fd.append('watermark', String(watermarkToggle.checked));
     state.inputFiles.forEach(f => fd.append('images', f));
 
@@ -254,7 +365,11 @@ window.addEventListener('keydown', (e) => {
         const t = e.target;
         if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT') && t !== promptInput) {
             e.preventDefault();
-            generate();
+            if (!$('videoView').classList.contains('hidden')) {
+                window.VideoUI?.generate();
+            } else {
+                generate();
+            }
         }
     }
 });
@@ -312,6 +427,7 @@ function openLightbox(item) {
     currentLightboxItem = item;
     lightboxImg.src = item.outputPath;
     lbPrompt.textContent = item.prompt;
+    lbModel.textContent = item.model || '—';
     lbSize.textContent = item.size || '—';
     lbRatio.textContent = item.requestedSize || '—';
     lbCreated.textContent = new Date(item.createdAt).toLocaleString();
@@ -323,11 +439,21 @@ function openLightbox(item) {
         lbInputs.textContent = 'None (text-to-image)';
     }
     lightbox.classList.remove('hidden');
+    mediaNav.refresh();
 }
 function closeLightbox() { lightbox.classList.add('hidden'); currentLightboxItem = null; }
 lightboxClose.addEventListener('click', closeLightbox);
 $('lightbox').querySelector('.lightbox-backdrop').addEventListener('click', closeLightbox);
 window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !lightbox.classList.contains('hidden')) closeLightbox(); });
+
+// Prev/next walks the filtered gallery, so navigation follows whatever the search
+// box is currently showing rather than the unfiltered set behind it.
+const mediaNav = MediaNav.attach({
+    lightbox,
+    list: filteredGallery,
+    current: () => currentLightboxItem,
+    open: openLightbox
+});
 
 lbCopyPrompt.addEventListener('click', async () => {
     if (!currentLightboxItem) return;
@@ -560,10 +686,12 @@ window.Studio = {
     },
     showToast,
     refreshSlots,
-    getActivePrompt: () => state.activePrompt
+    getActivePrompt: () => state.activePrompt,
+    getVideoEnabled: () => state.videoEnabled
 };
 
 // ============ Init ============
+populateModels();
 checkHealth();
 loadGallery();
 setInterval(checkHealth, 30000);

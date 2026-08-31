@@ -8,7 +8,9 @@ node_modules/
 
 # Generated user content (kept local, never published)
 gallery/
+videos/
 prompts/
+archive/
 
 # Scratch / debug artifacts
 body.json

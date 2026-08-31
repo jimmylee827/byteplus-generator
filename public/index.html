@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Seedream Studio</title>
+    <title>BytePlus Studio</title>
     <link rel="stylesheet" href="/styles.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -14,8 +14,8 @@
         <div class="brand">
             <div class="brand-mark"></div>
             <div>
-                <h1>Seedream Studio</h1>
-                <p class="brand-sub">BytePlus 4.5 · multi-image generation</p>
+                <h1>BytePlus Studio</h1>
+                <p class="brand-sub">Image &amp; video generation on BytePlus ModelArk</p>
             </div>
         </div>
         <div class="status" id="statusPill">
@@ -23,7 +23,12 @@
         </div>
     </header>
 
-    <main class="layout">
+    <nav class="tabs" id="tabStrip">
+        <button class="tab active" data-tab="image">Image</button>
+        <button class="tab" data-tab="video" id="videoTab">Video editing</button>
+    </nav>
+
+    <main class="layout" id="imageView">
         <!-- LEFT: Composer -->
         <section class="composer card">
             <h2>Compose</h2>
@@ -51,6 +56,13 @@
                 <div class="compiled-preview">
                     <div class="hint">Compiled prompt</div>
                     <div id="compiledPreview"></div>
+                </div>
+            </div>
+
+            <div class="row single">
+                <div class="control">
+                    <label for="modelSelect">Model</label>
+                    <select id="modelSelect"></select>
                 </div>
             </div>
 
@@ -120,6 +132,189 @@
         </section>
     </main>
 
+    <!-- ============ VIDEO EDITING VIEW ============ -->
+    <section class="layout hidden" id="videoView">
+        <!-- LEFT: Video composer -->
+        <section class="composer card">
+            <h2 id="vidComposerTitle">Video edit</h2>
+
+            <div class="segmented" id="vidModeToggle" role="tablist">
+                <button type="button" class="seg active" data-mode="edit" role="tab" aria-selected="true">Edit clip</button>
+                <button type="button" class="seg" data-mode="firstLast" role="tab" aria-selected="false">First → Last frame</button>
+            </div>
+
+            <p class="hint" id="vidModeHintEdit" style="margin:10px 0 6px">
+                Re-create a reference clip following your instruction — or drop the clip and
+                work from a reference image alone. <strong>Either one is enough.</strong>
+            </p>
+            <p class="hint" id="vidModeHintEditDetail" style="margin:0 0 10px">
+                With a clip, aspect ratio and duration are inherited from it — the model
+                doesn't let you override them. Source must run <strong>4–30s</strong>
+                and be at least <strong>~854×480</strong>.
+            </p>
+            <p class="hint hidden" id="vidModeHintRef" style="margin:0 0 10px">
+                Working from the reference image alone, so aspect ratio and duration are
+                yours to choose.
+            </p>
+            <p class="hint hidden" id="vidModeHintFrames" style="margin:10px 0 10px">
+                Generate a clip from a start image. Add an end image too and the model
+                interpolates between them as keyframes. The output aspect ratio follows
+                your <strong>first frame</strong>. Reference video and reference image
+                aren't available in this mode — the model rejects mixing them.
+            </p>
+
+            <!-- ===== Edit-mode inputs ===== -->
+            <div id="vidEditInputs">
+                <label class="field-label">Reference video <span class="hint" id="vidVideoReq">(required unless you add a reference image)</span></label>
+                <div id="vidDropZone" class="dropzone" tabindex="0">
+                    <input type="file" id="vidFileInput" accept="video/*" hidden>
+                    <div class="dropzone-inner">
+                        <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 5a2 2 0 012-2h8l4 4v12a2 2 0 01-2 2H6a2 2 0 01-2-2z"/><path d="M10 10l4 3-4 3z"/></svg>
+                        <p><strong>Drop a clip here</strong>, or <button type="button" class="link" id="vidBrowseBtn">browse</button></p>
+                        <p class="hint">MP4 · MOV · WEBM · up to 50 MB · or paste a URL below</p>
+                    </div>
+                </div>
+                <input type="text" id="vidUrlInput" placeholder="…or paste a reference video URL" style="margin-top:10px">
+                <div id="vidFileStrip" class="thumb-strip" style="margin-top:10px"></div>
+            </div>
+
+            <p id="vidUploadNotice" class="hint hidden" style="margin-top:8px;color:var(--warning,#e0a34a)">
+                Uploads are paused while the public tunnel reconnects — BytePlus downloads
+                reference media itself, so this server has to be reachable. It should come back
+                on its own within a few seconds.
+                <span id="vidUploadNoticeUrl">Pasting a public video URL works regardless.</span>
+            </p>
+
+            <!-- ===== Frame-mode inputs ===== -->
+            <div id="vidFrameInputs" class="hidden">
+                <div class="frame-slots">
+                    <div class="frame-slot">
+                        <label class="field-label">First frame <span class="hint">(required)</span></label>
+                        <div id="vidFirstDropZone" class="dropzone dropzone-sm" tabindex="0">
+                            <input type="file" id="vidFirstInput" accept="image/*" hidden>
+                            <div class="dropzone-inner">
+                                <p><strong>Start image</strong>, or <button type="button" class="link" id="vidFirstBrowseBtn">browse</button></p>
+                            </div>
+                        </div>
+                        <div id="vidFirstStrip" class="thumb-strip" style="margin-top:10px"></div>
+                    </div>
+                    <div class="frame-slot">
+                        <label class="field-label">Last frame <span class="hint">(optional)</span></label>
+                        <div id="vidLastDropZone" class="dropzone dropzone-sm" tabindex="0">
+                            <input type="file" id="vidLastInput" accept="image/*" hidden>
+                            <div class="dropzone-inner">
+                                <p><strong>End image</strong>, or <button type="button" class="link" id="vidLastBrowseBtn">browse</button></p>
+                            </div>
+                        </div>
+                        <div id="vidLastStrip" class="thumb-strip" style="margin-top:10px"></div>
+                    </div>
+                </div>
+            </div>
+
+            <label class="field-label" for="vidPromptInput"><span id="vidPromptLabel">Edit instruction</span></label>
+            <textarea id="vidPromptInput" rows="3" placeholder="Make it look like a night scene in neon city; keep the camera moves, swap the actor for an anime girl."></textarea>
+
+            <div id="vidRefImageBlock">
+                <label class="field-label">Reference image <span class="hint" id="vidImageReq">(optional — or use this instead of a clip)</span></label>
+                <div id="vidImgDropZone" class="dropzone dropzone-sm" tabindex="0">
+                    <input type="file" id="vidImgInput" accept="image/*" hidden>
+                    <div class="dropzone-inner">
+                        <p><strong>Add a reference image</strong>, or <button type="button" class="link" id="vidImgBrowseBtn">browse</button></p>
+                    </div>
+                </div>
+                <div id="vidImgStrip" class="thumb-strip" style="margin-top:10px"></div>
+            </div>
+
+            <!-- Which of these apply depends on the subtask, and the API rejects the whole
+                 request on a parameter it doesn't accept:
+                   reference clip  → both dictated by the clip; row hidden entirely
+                   image only      → both are real, honoured inputs
+                   first/last      → duration is ours, ratio follows the first frame -->
+            <div class="row hidden" id="vidGenControls" style="margin-top:14px">
+                <div class="control">
+                    <label for="vidDurationInput">Duration <span class="hint">(4–30s)</span></label>
+                    <input type="number" id="vidDurationInput" min="4" max="30" step="1" value="5">
+                </div>
+                <div class="control" id="vidRatioControl">
+                    <label for="vidRatioSelect">Aspect ratio</label>
+                    <select id="vidRatioSelect">
+                        <option value="16:9" selected>16:9</option>
+                        <option value="9:16">9:16</option>
+                        <option value="1:1">1:1</option>
+                        <option value="4:3">4:3</option>
+                        <option value="3:4">3:4</option>
+                        <option value="21:9">21:9</option>
+                        <option value="adaptive">Adaptive</option>
+                    </select>
+                </div>
+                <div class="control hidden" id="vidRatioNote">
+                    <label>Aspect ratio</label>
+                    <p class="hint" style="margin:8px 0 0">Follows your first frame — not adjustable.</p>
+                </div>
+            </div>
+
+            <div class="row" style="margin-top:14px">
+                <div class="control">
+                    <label for="vidModelSelect">Model</label>
+                    <select id="vidModelSelect">
+                        <option value="dreamina-seedance-2-5-260628" selected>Seedance 2.5</option>
+                    </select>
+                </div>
+                <div class="control">
+                    <label for="vidResolutionSelect">Resolution</label>
+                    <select id="vidResolutionSelect">
+                        <option value="1080p" selected>1080p</option>
+                        <option value="720p">720p</option>
+                        <option value="480p">480p</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="row">
+                <div class="control toggle">
+                    <label for="vidAudioToggle">Generate audio</label>
+                    <label class="switch">
+                        <input type="checkbox" id="vidAudioToggle" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="control toggle">
+                    <label for="vidWatermarkToggle">Watermark</label>
+                    <label class="switch">
+                        <input type="checkbox" id="vidWatermarkToggle">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <button id="vidGenerateBtn" class="primary-btn">
+                <span id="vidGenerateLabel">Generate edit</span>
+                <kbd>Ctrl</kbd><kbd>↵</kbd>
+            </button>
+            <div id="vidDisabledNotice" class="empty-state hidden" style="margin-top:14px">
+                <p>Video editing isn't available — no BytePlus API keys are configured on the server. Add <code>BYTEPLUS_API_KEYS</code> to <code>.env</code> (and an endpoint for image gen) and restart.</p>
+            </div>
+        </section>
+
+        <!-- RIGHT: Video pool & gallery -->
+        <section class="pool-wrap">
+            <div class="pool-header">
+                <h2>Workspace</h2>
+                <div class="pool-tools">
+                    <button id="vidRefreshBtn" class="icon-btn" title="Refresh">↻</button>
+                </div>
+            </div>
+
+            <div id="vidProcessingPool" class="processing-pool"></div>
+
+            <h3 class="gallery-title">Videos <span id="vidGalleryCount" class="hint">0</span></h3>
+            <div id="vidGallery" class="gallery gallery-video"></div>
+            <div id="vidGalleryEmpty" class="empty-state hidden">
+                <p>No videos yet. Upload a reference clip and describe your edit →</p>
+            </div>
+        </section>
+    </section>
+
     <!-- Lightbox modal -->
     <div id="lightbox" class="lightbox hidden">
         <div class="lightbox-backdrop"></div>
@@ -132,6 +327,7 @@
                 <h3>Details</h3>
                 <dl>
                     <dt>Prompt</dt><dd id="lbPrompt"></dd>
+                    <dt>Model</dt><dd id="lbModel"></dd>
                     <dt>Size</dt><dd id="lbSize"></dd>
                     <dt>Aspect</dt><dd id="lbRatio"></dd>
                     <dt>Created</dt><dd id="lbCreated"></dd>
@@ -141,6 +337,42 @@
                     <button id="lbCopyPrompt" class="ghost-btn">Copy prompt</button>
                     <a id="lbDownload" class="ghost-btn" download>Download</a>
                     <button id="lbDelete" class="danger-btn">Delete</button>
+                </div>
+            </aside>
+        </div>
+    </div>
+
+    <!-- Video lightbox modal -->
+    <div id="vidLightbox" class="lightbox hidden">
+        <div class="lightbox-backdrop"></div>
+        <div class="lightbox-content">
+            <button class="lightbox-close" id="vidLightboxClose">×</button>
+            <button class="lb-sound" id="vidSoundBtn" type="button">🔊</button>
+            <div class="lightbox-image-wrap lightbox-video-wrap">
+                <video id="vidLightboxPlayer" controls playsinline></video>
+            </div>
+            <aside class="lightbox-meta">
+                <h3 id="vlbTitle">Edit details</h3>
+                <dl>
+                    <dt id="vlbPromptLabel">Instruction</dt><dd id="vlbPrompt"></dd>
+                    <dt>Mode</dt><dd id="vlbMode"></dd>
+                    <dt>Model</dt><dd id="vlbModel"></dd>
+                    <dt>Aspect</dt><dd id="vlbRatio"></dd>
+                    <dt>Resolution</dt><dd id="vlbResolution"></dd>
+                    <dt>Duration</dt><dd id="vlbDuration"></dd>
+                    <dt>Audio</dt><dd id="vlbAudio"></dd>
+                    <dt>Created</dt><dd id="vlbCreated"></dd>
+                </dl>
+                <div id="vlbFrames" class="lb-frames hidden">
+                    <span class="field-label">Input frames</span>
+                    <div class="lb-frame-row">
+                        <figure><img id="vlbFirstImg" alt="First frame"><figcaption>First</figcaption></figure>
+                        <figure id="vlbLastFig"><img id="vlbLastImg" alt="Last frame"><figcaption>Last</figcaption></figure>
+                    </div>
+                </div>
+                <div class="lightbox-actions">
+                    <a id="vlbDownload" class="ghost-btn" download>Download MP4</a>
+                    <button id="vlbDelete" class="danger-btn">Delete</button>
                 </div>
             </aside>
         </div>
@@ -194,7 +426,9 @@
         </div>
     </div>
 
+    <script src="/media-nav.js"></script>
     <script src="/app.js"></script>
     <script src="/library.js"></script>
+    <script src="/video.js"></script>
 </body>
 </html>

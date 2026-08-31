@@ -1,6 +1,6 @@
-# Seedream Studio
+# BytePlus Studio
 
-A self-hosted, production-ready web app for generating images with **BytePlus ModelArk Seedream 4.5**, with hot-swappable API keys, multi-image inputs, a persistent local gallery, and a versioned prompt library with `{{variable:default}}` templating.
+A self-hosted, production-ready web app for generating images and editing videos with **BytePlus ModelArk** — Seedream image generation (4.5 endpoint **and** Seedream 5.0 Pro) plus Seedance 2.5 video editing — with hot-swappable API keys, multi-image inputs, a persistent local gallery, and a versioned prompt library with `{{variable:default}}` templating.
 
 > Bring your own BytePlus API key(s). The app runs entirely on your machine — generated images and saved prompts never leave your disk.
 
@@ -8,12 +8,15 @@ A self-hosted, production-ready web app for generating images with **BytePlus Mo
 
 ## Features
 
-- **Hot-swappable key rotation.** Drop in any number of API keys; the server rotates them automatically (proactively after 200 successful uses, reactively on `402 / 403 / 429`, hard-disable on `401`).
+- **Hot-swappable key rotation.** Drop in any number of API keys; the server rotates them automatically (proactively after 200 successful uses, reactively on `402 / 403 / 429`, hard-disable on `401`). The same keys power image generation *and* video editing.
+- **Two tabs.** *Image* (generation) and *Video editing* (Seedance 2.5). Switch in the top bar.
+- **Per-model image generation.** Pick Seedream 4.5 (your configured endpoint) or **Seedream 5.0 Pro** (`dola-seedream-5-0-pro-260628`) in the composer. 5.0 Pro tops out at 2K (1K / 1.5K / 2K) and supports PNG/JPEG, so the resolution dropdown and output format adapt to the selected model. Other model IDs can be passed through via the API.
+- **Video editing with Seedance 2.5.** Paste a public clip URL (or upload a local file, with `PUBLIC_BASE_URL` set — see below), write an edit instruction, set resolution / audio / watermark (ratio and duration are inherited from the source clip), and the app submits an `omni_reference_task_type: "edit"` task to `POST /api/v3/contents/generations/tasks`, polls `GET /api/v3/contents/generations/tasks/{id}` until it completes, and downloads the final MP4 to disk. The optional reference image is added with role `reference_image`.
 - **Multi-image composition.** Drag, drop, paste, or browse — 1 to 9 reference images per request, base64 forwarded to BytePlus.
-- **Permanent local gallery.** Generated images are downloaded to disk before the upstream URL expires. Manifest + input thumbnails are persisted, so your gallery survives restarts.
-- **Prompt library with version control.** Save reusable prompts by title; every body change creates a new version; history is browsable and restorable as a new version (no destructive edits).
-- **Variable templating.** Use `{{name:default}}` placeholders inside any prompt — duplicates share a single input, defaults seed the field, and a live compiled preview shows what will actually be sent.
-- **Resolution & aspect control.** 2K / 4K × 8 aspect ratios (1:1, 4:3, 3:4, 16:9, 9:16, 3:2, 2:3, 21:9), watermark toggle.
+- **Permanent local gallery.** Generated images *and* videos are downloaded to disk before the upstream URL expires. Manifests + input thumbnails are persisted, so your gallery survives restarts; stopped tasks resume polling on reload.
+- **Prompt library with version control.** Save reusable prompts by title; every body change creates a new version; history is browsable and restorable as a new version (no destructive edits). (Image tab.)
+- **Variable templating.** Use `{{name:default}}` placeholders inside any prompt — duplicates share a single input, defaults seed the field, and a live compiled preview shows what will actually be sent. (Image tab.)
+- **Resolution & aspect control.** Image: 2K / 4K × 8 aspect ratios (1:1, 4:3, 3:4, 16:9, 9:16, 3:2, 2:3, 21:9), watermark toggle. Video: 480p / 720p / 1080p, generate-audio & watermark toggles (ratio and duration follow the source clip).
 - **Studio-grade UX.** Sticky composer on desktop, global scroll on mobile, dark theme, processing pool with shimmer skeletons, lightbox with copy/download/delete, gallery search, keyboard shortcuts (`Ctrl/Cmd + Enter` to generate, `Esc` to close modals).
 - **Predictable file naming.** Gallery files are named `YYYYMMDD_HHmmss_sss[_N]` for clean chronological sort and conflict-free downloads.
 
@@ -25,6 +28,7 @@ A self-hosted, production-ready web app for generating images with **BytePlus Mo
 
 - Node.js **18+** (uses the built-in `fetch`)
 - A BytePlus ModelArk account with at least one API key and a Seedream endpoint ID
+- `cloudflared` — only for uploading local clips in the Video editing tab (`brew install cloudflared`)
 
 ### Install
 
@@ -44,6 +48,11 @@ ENDPOINT_ID=ep-XXXXXXXXXXXXXX
 
 # Comma-separated list of BytePlus API keys (the server rotates between them)
 BYTEPLUS_API_KEYS=key_one,key_two,key_three
+
+# Optional — the auto tunnel sets this for you on startup. Only set it manually
+# alongside AUTO_TUNNEL=0 (e.g. a stable named tunnel).
+# AUTO_TUNNEL=0
+# PUBLIC_BASE_URL=https://your-tunnel-hostname
 
 # Optional — defaults to 3000
 # PORT=3000
@@ -88,14 +97,18 @@ shot on {{camera:medium format}}, photographed by {{style}}
 
 ```
 byteplus-generator/
-├─ server.js              # Express API + key rotation + gallery & prompt persistence
+├─ server.js              # Express API + key rotation + gallery & prompt & video persistence
 ├─ migrate-gallery.js     # One-shot migration: UUID → timestamp filenames (idempotent)
+├─ tunnel.js              # cloudflared quick-tunnel supervisor (auto-restart + URL publish)
 ├─ public/
-│  ├─ index.html          # UI shell
+│  ├─ index.html          # UI shell (Image + Video editing tabs)
 │  ├─ styles.css          # Theme + components
-│  ├─ app.js              # Composer, gallery, lightbox, slot engine
-│  └─ library.js          # Prompt library drawer + editor
+│  ├─ app.js              # Composer, gallery, lightbox, slot engine, model selector, tabs
+│  ├─ library.js          # Prompt library drawer + editor
+│  └─ video.js            # Video editing composer, polling, gallery, lightbox
 ├─ gallery/                (generated, gitignored) Saved images + manifest.json
+├─ videos/                 (generated, gitignored) Saved video edits + manifest.json
+│  └─ staging/            Uploaded reference media, served publicly until the task finishes
 ├─ prompts/                (generated, gitignored) library.json with all prompts + versions
 ├─ .env                    (gitignored) Your secrets
 └─ .env.example
@@ -111,14 +124,44 @@ The browser app talks to a small JSON API; you can also drive it from `curl`, sc
 
 `POST /api/generate` — `multipart/form-data`
 
-| field       | type        | notes                                           |
-| ----------- | ----------- | ----------------------------------------------- |
-| `prompt`    | string      | Required. May contain pre-compiled text.        |
-| `size`      | string      | `2K`, `4K`, or explicit `WIDTHxHEIGHT`.         |
-| `watermark` | `"true"`/`"false"` | Optional, default `false`.               |
-| `images`    | file × 0–9  | Optional reference images.                      |
+| field           | type        | notes                                                                 |
+| --------------- | ----------- | --------------------------------------------------------------------- |
+| `prompt`        | string      | Required. May contain pre-compiled text.                             |
+| `model`         | string      | Optional. `endpoint` (default → your `ENDPOINT_ID`, Seedream 4.5) or a ModelArk model ID such as `dola-seedream-5-0-pro-260628`. |
+| `size`          | string      | `2K`, `4K`, `1K`, `1.5K`, or explicit `WIDTHxHEIGHT`.                |
+| `output_format` | string      | Optional. `png` / `jpeg` (Seedream 5.0 Pro); omitted → endpoint default. |
+| `watermark`     | `"true"`/`"false"` | Optional, default `false`.                                     |
+| `images`        | file × 0–9  | Optional reference images.                                            |
 
 Returns `{ success, item }` where `item` is the persisted gallery record.
+
+### Video editing (Seedance 2.5)
+
+`POST /api/video/generate` — `multipart/form-data` — starts an async edit task.
+
+| field            | type        | notes                                                          |
+| ---------------- | ----------- | -------------------------------------------------------------- |
+| `userMessage`    | string      | Required. The edit instruction.                               |
+| `video`          | file (1)    | Reference video (or `refVideoUrl` below). Staged locally and served via `PUBLIC_BASE_URL` with role `reference_video`; requires `PUBLIC_BASE_URL` to be set. |
+| `refVideoUrl`    | string      | Alternative to `video` — a public video URL, passed upstream verbatim. Needs no tunnel. |
+| `image`          | file (1)    | Optional reference image, sent with role `reference_image`. Also staged, so also needs `PUBLIC_BASE_URL`. |
+| `model`          | string      | Optional, default `dreamina-seedance-2-5-260628`.              |
+| `resolution`     | string      | `480p` / `720p` / `1080p` (default `1080p`).                   |
+
+> `ratio` and `duration` are **not accepted** in edit mode — the model derives both from
+> the source clip and rejects the request if either is sent. The real values come back on
+> the finished task and are stored on the record.
+| `generateAudio`  | `"true"`/`"false"` | Optional, default `false`.                              |
+| `watermark`      | `"true"`/`"false"` | Optional, default `false`.                              |
+
+Submits `omni_reference_task_type: "edit"` and returns `{ success, taskId, record }`.
+
+Polling: `GET /api/video/tasks/:id` → `{ success, status, task, record }` where `status` ∈ `queued | running | succeeded | failed`. On success the server downloads the produced MP4 to `videos/` and returns it as `record.fullVideo`.
+
+Other:
+
+- `GET /api/video/gallery` — list all video edits (newest first)
+- `DELETE /api/video/:id` — remove the record, the downloaded MP4, and any thumbnails
 
 ### Gallery
 
@@ -137,7 +180,7 @@ Returns `{ success, item }` where `item` is the persisted gallery record.
 
 ### Health
 
-`GET /api/health` → `{ ok, activeKeys, totalKeys }`
+`GET /api/health` → `{ ok, activeKeys, totalKeys, videoEnabled, videoUploadsEnabled }`
 
 ---
 
@@ -157,21 +200,84 @@ The script is idempotent, sorts by `createdAt` for stable collision suffixes, re
 
 | Variable             | Required | Description                                                |
 | -------------------- | -------- | ---------------------------------------------------------- |
-| `ENDPOINT_ID`        | yes      | Your Seedream endpoint (e.g., `ep-...`).                   |
-| `BYTEPLUS_API_KEYS`  | yes      | Comma-separated list of keys. Order is the rotation order. |
+| `ENDPOINT_ID`        | yes      | Your Seedream 4.5 endpoint (e.g., `ep-...`). Used for the default "endpoint" image-model option. |
+| `BYTEPLUS_API_KEYS`  | yes      | Comma-separated list of ARK API keys. Order is the rotation order. Shared by image generation **and** Seedance video editing. |
+| `VIDEO_MODEL`        | no       | Seedance model ID for the Video editing tab (default `dreamina-seedance-2-5-260628`). |
+| `PUBLIC_BASE_URL`    | no       | Public address of this server. **Set automatically by the auto tunnel**; only provide it yourself with `AUTO_TUNNEL=0`. |
+| `AUTO_TUNNEL`        | no       | `0` disables the built-in cloudflared supervisor (default on). Use with your own `PUBLIC_BASE_URL`. |
+| `VIDEO_UPLOAD_LIMIT_MB` | no    | Max size of an uploaded reference clip (default `200`).    |
 | `PORT`               | no       | HTTP port (default `3000`).                                |
 
-The base URL is currently hard-coded to the BytePlus AP-Southeast region (`https://ark.ap-southeast.bytepluses.com/api/v3/images/generations`). Change it in [`server.js`](server.js) if you're on a different region.
+### Video uploads and the auto tunnel
+
+BytePlus fetches reference media **itself, server-side, from a URL**. Its task API accepts
+exactly five content types — `text`, `image_url`, `audio_url`, `video_url`, `draft_task` —
+so there is no way to hand it bytes directly:
+
+- base64 data URIs are rejected (`reference_video must be provided as a web url`),
+- there is no `file_id` content block, and
+- the ModelArk Files API is not a workaround: uploads reach `status: "active"` but never
+  return the documented `download_url`, so a `file_id` can't be resolved to a URL either.
+
+So a **local** clip only works if BytePlus can download it from you. `npm start` handles
+this automatically: it launches a `cloudflared` quick tunnel, publishes the hostname as
+`PUBLIC_BASE_URL`, and stages uploads into `videos/staging/` behind it. **No setup needed** —
+just make sure `cloudflared` is installed (`brew install cloudflared`).
+
+Quick-tunnel hostnames are **ephemeral and rotate**. The supervisor in [`tunnel.js`](tunnel.js)
+handles that for you:
+
+- watches the `cloudflared` process and respawns it (2s → 60s backoff) whenever it dies,
+- republishes each new hostname live — **no server restart required**,
+- mirrors it into `.env` atomically, and reports it at `GET /api/health`,
+- marks uploads unavailable while reconnecting, so nothing is staged behind a dead URL,
+- kills the tunnel on `SIGINT`/`SIGTERM` so no orphan is left behind.
+
+The browser polls health every 30s, so the composer re-enables itself automatically.
+
+**Pasting a public video URL needs no tunnel at all** — BytePlus fetches that directly.
+
+#### Named tunnel on your own domain (recommended for large clips)
+
+Free quick tunnels are throttled to roughly **100–400 KB/s**, so BytePlus times out
+fetching anything sizeable (`timeout while fetching resource`). Measured on a quick
+tunnel: 5 MB took 47s, 20 MB took 55s — the same files serve locally in 0.02s. A named
+tunnel on a domain you own removes that limit and pins the hostname.
+
+One-time setup, then set both vars and the server does the rest:
+
+```ini
+TUNNEL_NAME=byteplus-studio
+TUNNEL_HOSTNAME=byteplus.yourdomain.com
+```
+
+In this mode the server runs *your* tunnel only while it's up, publishes the fixed
+hostname once the edge registers a connection, and leaves `.env` alone. Setup steps are
+in [docs/named-tunnel.md](docs/named-tunnel.md).
+
+To manage the address entirely yourself, set `AUTO_TUNNEL=0` and provide your own
+`PUBLIC_BASE_URL`.
+
+Staged inputs are deleted once a task reaches a terminal state; anything orphaned by an
+interrupted task is swept after 6 hours (on boot and hourly).
+
+> Reference clips must clear the model's floor of **407,696 pixels** (~854×480) and run
+> **4–30 seconds**; otherwise the task is rejected with a `video pixel count` or duration
+> error. Uploads are capped at 200 MB (`VIDEO_UPLOAD_LIMIT_MB`).
+
+> **Activate the models you want to use** in the [Ark Console](https://ai.byteplus.com/ark). Both `dola-seedream-5-0-pro-260628` (Seedream 5.0 Pro) and `dreamina-seedance-2-5-260628` (Seedance 2.5) must be activated on your account before the corresponding UI options will succeed; the default Seedream 4.5 endpoint (`ENDPOINT_ID`) is unaffected.
+
+The base URL is hard-coded to the BytePlus AP-Southeast region (`https://ark.ap-southeast.bytepluses.com/api/v3`). Image generation hits `/images/generations`; video editing hits `/contents/generations/tasks`. Change `WEB_API_BASE` / `API_URL` in [`server.js`](server.js) if you're on a different region.
 
 ---
 
 ## Privacy & data handling
 
 - Your API keys live only in `.env` and in the server's memory.
-- Generated images are downloaded to `gallery/` on your disk; the upstream URL is never persisted (it expires in 24 h anyway).
+- Generated images are downloaded to `gallery/` and edited videos to `videos/` on your disk; upstream URLs are never persisted (they expire anyway).
 - Reference images you upload are stored locally as input thumbnails next to each generated image.
 - Saved prompts and version history live in `prompts/library.json`.
-- `.gitignore` excludes `.env`, `gallery/`, and `prompts/` so nothing personal is ever committed.
+- `.gitignore` excludes `.env`, `gallery/`, `videos/`, and `prompts/` so nothing personal is ever committed.
 
 There is no telemetry. The server only contacts BytePlus, and only on your action.
 
@@ -181,7 +287,7 @@ There is no telemetry. The server only contacts BytePlus, and only on your actio
 
 - **Backend:** Node.js, Express 5, Multer, dotenv
 - **Frontend:** Vanilla JS, CSS custom properties, Inter font
-- **Upstream:** BytePlus ModelArk Seedream 4.5
+- **Upstream:** BytePlus ModelArk — Seedream (4.5 endpoint + 5.0 Pro) for images, Seedance 2.5 for video editing
 
 No build step. No bundler. No framework.
 

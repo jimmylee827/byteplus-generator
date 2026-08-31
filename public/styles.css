@@ -147,6 +147,10 @@ button { font-family: inherit; cursor: pointer; }
     color: var(--text-dim);
 }
 .dropzone:hover, .dropzone:focus { border-color: var(--accent); color: var(--text); outline: none; }
+/* Uploads unavailable (no PUBLIC_BASE_URL): dim the zone but keep it clickable so
+   the click still explains why via a toast. */
+.dropzone.disabled { opacity: .45; }
+.dropzone.disabled:hover, .dropzone.disabled:focus { border-color: var(--border); }
 .dropzone.drag-over {
     border-color: var(--accent);
     background: var(--accent-soft);
@@ -373,11 +377,62 @@ textarea:focus, input:focus, select:focus {
     .lightbox-meta { border-left: none !important; border-top: 1px solid var(--border); }
 }
 .lightbox-image-wrap {
+    position: relative;
     background: #000;
     display: flex; align-items: center; justify-content: center;
     overflow: hidden;
 }
 .lightbox-image-wrap img { max-width: 100%; max-height: 100%; object-fit: contain; }
+
+/* ---- Media navigation ---- */
+.lb-nav {
+    position: absolute; top: 50%; transform: translateY(-50%);
+    z-index: 3;
+    width: 40px; height: 68px;
+    border: none; border-radius: 8px;
+    background: rgba(0,0,0,0.45); color: #fff;
+    font-size: 30px; line-height: 1; cursor: pointer;
+    opacity: 0; transition: var(--transition);
+}
+.lightbox-image-wrap:hover .lb-nav { opacity: 1; }
+.lb-nav:hover { background: rgba(0,0,0,0.8); }
+.lb-nav-prev { left: 10px; }
+.lb-nav-next { right: 10px; }
+@media (hover: none) { .lb-nav { opacity: 1; } }
+
+/* Invisible click targets — they only come alive in the full-bleed view. */
+/* Longhand, not `inset`, so the video override below unambiguously wins on `bottom`. */
+.lb-zones { position: absolute; top: 0; right: 0; bottom: 0; left: 0; z-index: 2; display: none; }
+.lb-full .lb-zones { display: flex; }
+.lb-zone { flex: 1; }
+.lb-zone-prev { cursor: w-resize; }
+.lb-zone-next { cursor: e-resize; }
+.lb-zone-exit { flex: 1.2; cursor: zoom-out; }
+
+/* Full-bleed: media fills the viewport, the details panel steps aside. */
+.lightbox.lb-full .lightbox-content {
+    width: 100vw; height: 100vh;
+    grid-template-columns: 1fr;
+    background: transparent; border: none; border-radius: 0; box-shadow: none;
+}
+.lightbox.lb-full .lightbox-meta { display: none; }
+.lightbox.lb-full .lightbox-image-wrap { background: transparent; }
+.lightbox.lb-full .lightbox-video-wrap video { max-height: 100vh; }
+/* The native player chrome — play, scrubber, volume — lives along the bottom of the
+   video element. Stop the nav zones short of it, or full-bleed covers the controls
+   and clicking the volume slider navigates instead. */
+.lightbox.lb-full .lightbox-video-wrap .lb-zones { bottom: 80px; }
+
+/* Sound state, reachable in both views and independent of the native chrome. */
+.lb-sound {
+    position: absolute; top: 12px; right: 56px; z-index: 5;
+    width: 36px; height: 36px;
+    border: none; border-radius: 50%;
+    background: rgba(0,0,0,0.6); color: #fff;
+    font-size: 15px; line-height: 1; cursor: pointer;
+    transition: var(--transition);
+}
+.lb-sound:hover { background: rgba(0,0,0,0.85); }
 .lightbox-meta {
     padding: 24px;
     border-left: 1px solid var(--border);
@@ -395,7 +450,9 @@ textarea:focus, input:focus, select:focus {
 }
 .lightbox-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; }
 .lightbox-close {
-    position: absolute; top: 12px; right: 12px; z-index: 2;
+    /* Above the nav buttons and the full-bleed click zones, both of which reach into
+       this corner — at a lower z-index the zones simply swallow the close click. */
+    position: absolute; top: 12px; right: 12px; z-index: 5;
     width: 36px; height: 36px;
     border: none; border-radius: 50%;
     background: rgba(0,0,0,0.6); color: white;
@@ -642,3 +699,155 @@ textarea:focus, input:focus, select:focus {
 }
 .lib-editor-actions .spacer { flex: 1; }
 .primary-btn.lib-save { width: auto; padding: 10px 20px; margin-top: 0; }
+
+/* ============ Tabs ============ */
+.tabs {
+    display: flex;
+    gap: 4px;
+    padding: 0 28px;
+    margin: -1px 0 0;
+    border-bottom: 1px solid var(--border);
+    background: rgba(11, 13, 18, 0.6);
+    position: sticky;
+    top: 72px;
+    z-index: 40;
+    backdrop-filter: blur(8px);
+}
+.tab {
+    background: none; border: none; color: var(--text-mute);
+    padding: 12px 16px;
+    font-size: 14px; font-weight: 600;
+    border-bottom: 2px solid transparent;
+    transition: var(--transition);
+    cursor: pointer;
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--text); border-bottom-color: var(--accent); }
+.tab.disabled { opacity: 0.55; }
+@media (max-width: 980px) { .tabs { position: static; padding: 0 16px; } }
+
+/* Full-width single-control row (model selector) */
+.row.single { grid-template-columns: 1fr; }
+
+/* Small variant of the dropzone for the optional ref image */
+.dropzone.dropzone-sm { padding: 16px; }
+.dropzone.dropzone-sm .dropzone-inner p { margin: 0; font-size: 13px; }
+
+/* ============ Segmented control (video sub-mode) ============ */
+/* Distinct from .tab, which is the sticky top nav and carries a bottom-border
+   accent that reads as "page", not "option within this panel". */
+.segmented {
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+.segmented .seg {
+    flex: 1;
+    background: none; border: none; color: var(--text-mute);
+    padding: 8px 12px;
+    font-size: 13px; font-weight: 600;
+    border-radius: 6px;
+    transition: var(--transition);
+    white-space: nowrap;
+}
+.segmented .seg:hover { color: var(--text); }
+.segmented .seg.active {
+    background: var(--accent-soft);
+    color: var(--text);
+    box-shadow: inset 0 0 0 1px rgba(124, 92, 255, 0.35);
+}
+
+/* Side-by-side first/last keyframe dropzones */
+.frame-slots { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.frame-slots .frame-slot { min-width: 0; }
+@media (max-width: 620px) { .frame-slots { grid-template-columns: 1fr; } }
+
+/* Input keyframes shown in the video lightbox */
+.lb-frames { margin-top: 14px; }
+.lb-frame-row { display: flex; gap: 10px; margin-top: 8px; }
+.lb-frame-row figure { margin: 0; flex: 1; min-width: 0; }
+.lb-frame-row img {
+    width: 100%; aspect-ratio: 1 / 1; object-fit: cover;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    display: block;
+}
+.lb-frame-row figcaption {
+    margin-top: 4px;
+    font-size: 11px; color: var(--text-mute); text-align: center;
+}
+
+/* Thumb chip carrying a filename (for video references) */
+.thumb.thumb-wide {
+    width: auto; max-width: 100%;
+    height: auto; min-height: 36px;
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 10px;
+}
+.thumb.thumb-wide .thumb-label {
+    max-width: 220px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-size: 12px; color: var(--text-dim);
+}
+
+.job-status {
+    padding: 0 12px 10px;
+    font-size: 11px; color: var(--text-mute);
+}
+
+/* ---- Video gallery ---- */
+.gallery-video .gallery-item-video {
+    aspect-ratio: 16 / 9;
+}
+.gallery-item-video video {
+    width: 100%; height: 100%; object-fit: cover; display: block;
+}
+.gallery-item-video .video-placeholder {
+    width: 100%; height: 100%;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-mute); font-size: 13px;
+    background: linear-gradient(110deg, #1a1f2c 8%, #232938 18%, #1a1f2c 33%);
+    background-size: 200% 100%;
+    animation: shimmer 1.4s linear infinite;
+}
+.gallery-item-video .video-placeholder.failed {
+    animation: none;
+    background: rgba(255, 84, 112, 0.08);
+    color: var(--danger);
+}
+.gallery-item-video .play-badge {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 40px; height: 40px;
+    background: rgba(0,0,0,0.6);
+    color: #fff;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px;
+    opacity: 0; transition: var(--transition);
+    pointer-events: none;
+}
+.gallery-item-video:hover .play-badge { opacity: 1; }
+/* Marks a clip that was generated with audio off — it has no audio track to play. */
+.gallery-item-video .mute-badge {
+    position: absolute; top: 8px; right: 8px;
+    padding: 2px 6px; border-radius: 6px;
+    background: rgba(0,0,0,0.6);
+    font-size: 12px; line-height: 1.4;
+}
+
+/* ---- Video lightbox ---- */
+.lightbox-video-wrap {
+    background: #000;
+    display: flex; align-items: center; justify-content: center;
+}
+.lightbox-video-wrap video {
+    width: 100%; height: 100%;
+    max-height: 86vh;
+    object-fit: contain;
+    background: #000;
+}
+.lightbox-meta dl dd { font-size: 13px; }
