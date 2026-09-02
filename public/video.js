@@ -42,6 +42,23 @@
     const lbLastImg = $('vlbLastImg');
     const lbLastFig = $('vlbLastFig');
 
+    // Remembers which clips were saved this page load so a repeat activation (a double
+    // click, or the Enter shortcut on an already-saved clip) is blocked with a toast
+    // instead of re-triggering the browser download. In-memory only: cleared on reload.
+    const downloadedVideos = new Set();
+    function activateVideoDownload(event) {
+        disarmDelete(); // choosing to download is a different intent — cancel any pending delete
+        const href = lbDownload.href;
+        if (!href) { event.preventDefault(); return; }
+        if (downloadedVideos.has(href)) {
+            event.preventDefault();
+            showToast('Already downloaded.', '');
+            return;
+        }
+        downloadedVideos.add(href);
+    }
+    lbDownload.addEventListener('click', activateVideoDownload);
+
     const uploadNotice = $('vidUploadNotice');
     const uploadNoticeUrl = $('vidUploadNoticeUrl');
 
@@ -497,6 +514,10 @@
 
     // ---------- Gallery ----------
     async function loadGallery() {
+        // Panic mode (default on): withhold the server's stored video history until
+        // the user unlocks it. Clips generated this session live in `items` already
+        // and keep rendering; we just don't pull the past in.
+        if (window.Panic && !window.Panic.isRevealed()) { renderGallery(); return; }
         try {
             const r = await fetch('/api/video/gallery');
             const d = await r.json();
@@ -545,7 +566,11 @@
 
     // ---------- Lightbox ----------
     let current = null;
+    // Two-key delete: Del (or the trash button) arms it; the next Enter confirms. See armDelete().
+    let deleteArmed = false;
+    let deleteArmTimer;
     function openLightbox(it) {
+        disarmDelete(); // a delete armed on the previous clip must not carry over
         current = it;
         const src = it.fullVideo || '';
         player.src = src;
@@ -611,6 +636,7 @@
     });
     player.addEventListener('volumechange', syncSound);
     function closeLightbox() {
+        disarmDelete();
         lightbox.classList.add('hidden');
         player.pause(); player.removeAttribute('src'); player.load();
         current = null;
@@ -618,7 +644,26 @@
     lbClose.addEventListener('click', closeLightbox);
     lightbox.querySelector('.lightbox-backdrop').addEventListener('click', closeLightbox);
     window.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && !lightbox.classList.contains('hidden')) closeLightbox();
+        if (e.key !== 'Escape' || lightbox.classList.contains('hidden')) return;
+        // While a delete is armed, Esc cancels it rather than closing the lightbox.
+        if (deleteArmed) { disarmDelete(); showToast('Delete cancelled.', ''); return; }
+        closeLightbox();
+    });
+
+    // Keyboard shortcuts while the lightbox is open:
+    //   Del   → arm deletion (shows a toast; nothing is removed yet)
+    //   Enter → confirm a pending deletion, otherwise download the current clip (full MP4)
+    // The pending-delete check runs before the download branch so Del → Enter always
+    // completes, whatever control happens to be focused.
+    window.addEventListener('keydown', (e) => {
+        if (lightbox.classList.contains('hidden')) return;
+        if (e.key === 'Delete') { e.preventDefault(); armDelete(); return; }
+        if (e.key !== 'Enter' || e.ctrlKey || e.metaKey || e.altKey) return;
+        if (deleteArmed) { e.preventDefault(); performDelete(); return; }
+        const t = e.target;
+        if (t && ['BUTTON', 'A', 'INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName)) return;
+        e.preventDefault();
+        lbDownload.click();
     });
 
     // Only succeeded items open a lightbox, so prev/next steps over the pending and
@@ -631,20 +676,43 @@
         video: true
     });
 
-    lbDelete.addEventListener('click', async () => {
+    // Deletion is a two-key confirmation: Del (or the trash button) arms it and shows a
+    // toast; the next Enter carries it out. Nothing blocks on a modal, and the armed state
+    // self-clears on timeout so a forgotten confirmation can't linger.
+    function armDelete() {
         if (!current) return;
-        if (!confirm('Delete this video edit permanently?')) return;
+        deleteArmed = true;
+        lbDelete.blur(); // drop focus so the confirming Enter reaches the shortcut, not this button
+        showToast('Press Enter to confirm delete · Esc to cancel', 'error');
+        clearTimeout(deleteArmTimer);
+        deleteArmTimer = setTimeout(() => { deleteArmed = false; }, 3500);
+    }
+    function disarmDelete() {
+        deleteArmed = false;
+        clearTimeout(deleteArmTimer);
+    }
+    async function performDelete() {
+        if (!current) { disarmDelete(); return; }
+        disarmDelete();
         const id = current.id;
         try {
             const r = await fetch(`/api/video/${encodeURIComponent(id)}`, { method: 'DELETE' });
             const d = await r.json();
             if (!d.success) throw new Error(d.error);
+            // Only succeeded clips are viewable, so land on a neighbour within that list.
+            const viewable = items.filter(it => it.status === 'succeeded');
+            const idx = viewable.findIndex(x => x.id === id);
             items = items.filter(i => i.id !== id);
             renderGallery();
-            closeLightbox();
+            // Keep the viewer open on the adjacent previous clip (the one to the left).
+            // Deleting the first falls back to the new first; an emptied list closes.
+            const remaining = items.filter(it => it.status === 'succeeded');
+            if (remaining.length === 0) closeLightbox();
+            else openLightbox(remaining[Math.max(0, idx - 1)]);
             showToast('Deleted.', 'success');
         } catch (e) { showToast('Delete failed: ' + e.message, 'error'); }
-    });
+    }
+    lbDelete.addEventListener('click', armDelete);
 
     // ---------- Helpers ----------
     function escapeHtml(s) {
@@ -659,6 +727,10 @@
         loaded = true;
         loadGallery();
     }
+    // When panic is lifted, refresh the full history — but only if this tab has
+    // already loaded once. If it hasn't, ensureLoaded() will pull the full set the
+    // first time the video tab is opened (panic is revealed by then).
+    window.Panic?.onReveal(() => { if (loaded) loadGallery(); });
     window.VideoUI = {
         generate,
         onShow() { ensureLoaded(); },

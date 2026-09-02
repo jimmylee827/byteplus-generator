@@ -107,6 +107,23 @@ const activePromptTitle = $('activePromptTitle');
 const activePromptVer = $('activePromptVer');
 const detachPromptBtn = $('detachPromptBtn');
 
+// Remembers which files were saved this page load so a repeat activation (a double
+// click, or the Enter shortcut landing on an already-saved image) is blocked with a
+// toast instead of re-triggering the browser download. In-memory only: cleared on reload.
+const downloadedImages = new Set();
+function activateImageDownload(event) {
+    disarmDelete(); // choosing to download is a different intent — cancel any pending delete
+    const href = lbDownload.href;
+    if (!href) { event.preventDefault(); return; }
+    if (downloadedImages.has(href)) {
+        event.preventDefault();
+        showToast('Already downloaded.', '');
+        return;
+    }
+    downloadedImages.add(href);
+}
+lbDownload.addEventListener('click', activateImageDownload);
+
 // ============ Toast ============
 let toastTimer;
 function showToast(msg, kind = '') {
@@ -376,6 +393,13 @@ window.addEventListener('keydown', (e) => {
 
 // ============ Gallery ============
 async function loadGallery() {
+    // Panic mode (default on): withhold the server's stored history until the user
+    // unlocks it with the brand-mark gesture. Session-generated images already live
+    // in state.gallery and keep rendering; we simply don't pull the past in.
+    if (window.Panic && !window.Panic.isRevealed()) {
+        renderGallery();
+        return;
+    }
     try {
         const r = await fetch('/api/gallery');
         const d = await r.json();
@@ -423,7 +447,11 @@ refreshBtn.addEventListener('click', loadGallery);
 
 // ============ Lightbox ============
 let currentLightboxItem = null;
+// Two-key delete: Del (or the trash button) arms it; the next Enter confirms. See armDelete().
+let deleteArmed = false;
+let deleteArmTimer;
 function openLightbox(item) {
+    disarmDelete(); // a delete armed on the previous item must not carry over
     currentLightboxItem = item;
     lightboxImg.src = item.outputPath;
     lbPrompt.textContent = item.prompt;
@@ -441,10 +469,32 @@ function openLightbox(item) {
     lightbox.classList.remove('hidden');
     mediaNav.refresh();
 }
-function closeLightbox() { lightbox.classList.add('hidden'); currentLightboxItem = null; }
+function closeLightbox() { disarmDelete(); lightbox.classList.add('hidden'); currentLightboxItem = null; }
 lightboxClose.addEventListener('click', closeLightbox);
 $('lightbox').querySelector('.lightbox-backdrop').addEventListener('click', closeLightbox);
-window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !lightbox.classList.contains('hidden')) closeLightbox(); });
+window.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || lightbox.classList.contains('hidden')) return;
+    // While a delete is armed, Esc cancels it rather than closing the lightbox.
+    if (deleteArmed) { disarmDelete(); showToast('Delete cancelled.', ''); return; }
+    closeLightbox();
+});
+
+// Keyboard shortcuts while the lightbox is open:
+//   Del   → arm deletion (shows a toast; nothing is removed yet)
+//   Enter → confirm a pending deletion, otherwise download the current image (full size)
+// The pending-delete check runs before the download branch so Del → Enter always
+// completes, whatever control happens to be focused. Enter still mirrors the download
+// button (routed through its click) when no delete is armed.
+window.addEventListener('keydown', (e) => {
+    if (lightbox.classList.contains('hidden')) return;
+    if (e.key === 'Delete') { e.preventDefault(); armDelete(); return; }
+    if (e.key !== 'Enter' || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (deleteArmed) { e.preventDefault(); performDelete(); return; }
+    const t = e.target;
+    if (t && ['BUTTON', 'A', 'INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName)) return;
+    e.preventDefault();
+    lbDownload.click();
+});
 
 // Prev/next walks the filtered gallery, so navigation follows whatever the search
 // box is currently showing rather than the unfiltered set behind it.
@@ -461,22 +511,44 @@ lbCopyPrompt.addEventListener('click', async () => {
     showToast('Prompt copied.', 'success');
 });
 
-lbDelete.addEventListener('click', async () => {
+// Deletion is a two-key confirmation: Del (or the trash button) arms it and shows a
+// toast; the next Enter carries it out. Nothing blocks on a modal, and the armed state
+// self-clears on timeout so a forgotten confirmation can't linger.
+function armDelete() {
     if (!currentLightboxItem) return;
-    if (!confirm('Delete this image permanently?')) return;
+    deleteArmed = true;
+    lbDelete.blur(); // drop focus so the confirming Enter reaches the shortcut, not this button
+    showToast('Press Enter to confirm delete · Esc to cancel', 'error');
+    clearTimeout(deleteArmTimer);
+    deleteArmTimer = setTimeout(() => { deleteArmed = false; }, 3500);
+}
+function disarmDelete() {
+    deleteArmed = false;
+    clearTimeout(deleteArmTimer);
+}
+async function performDelete() {
+    if (!currentLightboxItem) { disarmDelete(); return; }
+    disarmDelete();
     const id = currentLightboxItem.id;
     try {
         const r = await fetch(`/api/gallery/${id}`, { method: 'DELETE' });
         const d = await r.json();
         if (!d.success) throw new Error(d.error);
+        // Note where the deleted image sat so we can land on its neighbour afterwards.
+        const idx = filteredGallery().findIndex(x => x.id === id);
         state.gallery = state.gallery.filter(i => i.id !== id);
         renderGallery();
-        closeLightbox();
+        // Keep the viewer open on the adjacent previous image (the one to the left).
+        // Deleting the first image falls back to the new first; an emptied gallery closes.
+        const remaining = filteredGallery();
+        if (remaining.length === 0) closeLightbox();
+        else openLightbox(remaining[Math.max(0, idx - 1)]);
         showToast('Deleted.', 'success');
     } catch (e) {
         showToast('Delete failed: ' + e.message, 'error');
     }
-});
+}
+lbDelete.addEventListener('click', armDelete);
 
 // ============ Helpers ============
 function escapeHtml(s) {
@@ -694,4 +766,7 @@ window.Studio = {
 populateModels();
 checkHealth();
 loadGallery();
+// When panic is lifted, pull the full stored history in (this replaces the
+// session-only view with everything the server has, session items included).
+window.Panic?.onReveal(() => loadGallery());
 setInterval(checkHealth, 30000);
