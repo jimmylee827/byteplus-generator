@@ -6,8 +6,12 @@ downloads your reference clip server-side and gives up if it's slow, which is th
 tunnel: **5 MB took 47s, 20 MB took 55s** — the same files serve locally in 0.02s.
 
 A named tunnel on your own domain removes the throttle and gives you a hostname that
-never rotates. The server runs it **only while `node server.js` is running** — nothing is
-installed as a background service.
+never rotates. It runs **only while `ai-media-studio serve` (or `npm start`, or
+`ai-media-studio tunnel up`) is running** — nothing is installed as a background service.
+
+Only staged uploads (`/videos/staging/*`) are reachable through the tunnel. The web UI and
+the API answer on `localhost` only, so a fixed public hostname doesn't expose your
+gallery, your prompts, or paid generation.
 
 ---
 
@@ -101,7 +105,7 @@ named mode it does **not** rewrite `.env`, unlike quick-tunnel mode.)
 ## Step 5 — Start and verify
 
 ```bash
-node server.js
+npm start            # or: npx ai-media-studio serve
 ```
 
 Expected:
@@ -112,15 +116,22 @@ Expected:
 [TUNNEL] uploads enabled via https://byteplus.cloudflared.hk
 ```
 
-Check from outside:
+Check it locally — any process on this machine sees the same tunnel:
 
 ```bash
-curl -s https://byteplus.cloudflared.hk/api/health
+npx ai-media-studio tunnel status
+# up  https://byteplus.cloudflared.hk  (named, pid 12345)
+npx ai-media-studio health          # "uploads   via https://byteplus.cloudflared.hk"
 ```
 
-Should report `"videoUploadsEnabled": true` with your hostname as `publicBaseUrl`.
+From outside, only staged files answer; everything else is a 404 by design:
 
-Measure the throughput gain — this is the whole point:
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" https://byteplus.cloudflared.hk/api/health   # 404
+```
+
+Measure the throughput gain — this is the whole point (this also proves staged files are
+reachable from outside):
 
 ```bash
 mkdir -p videos/staging
@@ -136,9 +147,10 @@ A quick tunnel took ~55s for 20 MB. Expect a few seconds here.
 
 ## Lifecycle
 
-The tunnel is a child process of the server:
+The tunnel is a child process of `ai-media-studio serve` (or of `ai-media-studio tunnel up`,
+which serves only the staging folder, for CLI/MCP use without the web UI):
 
-- starts when `node server.js` starts,
+- starts when the server starts,
 - dies on `Ctrl-C` / `SIGTERM` — no orphan is left behind,
 - auto-restarts (2s → 60s backoff) if it drops while the server runs,
 - keeps the **same** hostname across restarts.
@@ -158,6 +170,9 @@ the reason rather than looping silently.
 
 **Error 1016 when visiting the hostname** — DNS points at a tunnel that isn't running.
 Start the server; the record is only live while it is.
+
+**404 for the web UI through the hostname** — expected. Through the tunnel only
+`/videos/staging/*` is served; open the UI at `http://localhost:3000`.
 
 **Removing a DNS record** — `cloudflared` can create routes but not delete them. Use the
 Cloudflare dashboard (DNS → find the record → Delete) or the API with a

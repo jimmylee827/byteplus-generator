@@ -8,7 +8,7 @@
 //   log.jsonl   one line per intercepted request: { method, url, keyIndex, raw }
 //   state.json  counters for generated ids
 //
-// response: { status, json?, text?, bytes?: 'jpeg'|'png'|'webp'|'mp4', networkError?: true }
+// response: { status, json?, text?, bytes?: 'jpeg'|'png'|'webp'|'mp4', base64?, networkError?: true }
 const fs = require('fs');
 const path = require('path');
 
@@ -61,6 +61,9 @@ function takeRule(signature) {
 function respond(spec) {
     if (spec.networkError) throw new TypeError('fetch failed (mock network error)');
     const status = spec.status || 200;
+    if (spec.base64) {
+        return new Response(Buffer.from(spec.base64, 'base64'), { status, headers: { 'Content-Type': 'application/octet-stream' } });
+    }
     if (spec.bytes) {
         return new Response(BYTES[spec.bytes], { status, headers: { 'Content-Type': 'application/octet-stream' } });
     }
