@@ -2,6 +2,9 @@
 // Drives BytePlus ModelArk contents/generations/tasks: the server creates an
 // async edit task, the client polls /api/video/tasks/:id until terminal, and the
 // server downloads the produced clip. This module handles lifecycle + rendering.
+// Every rule — which subtask the inputs imply, which parameters it accepts, what
+// is valid, when a task is finished — comes from the server (`video plan`,
+// `video modes`, and the poll response); this file only shows and hides things.
 (function () {
     const $ = (id) => document.getElementById(id);
     const showToast = (m, k) => window.Studio?.showToast(m, k);
@@ -90,6 +93,9 @@
     let uploadsEnabled = false;
     let items = [];          // manifest records (newest first)
     const pending = new Set(); // taskIds still being polled
+    let pendingIds = new Set(); // taskIds the server says are still running
+    let modes = null;          // GET /api/video/modes
+    let plan = null;           // last POST /api/video/plan for the composer's inputs
 
     // ---------- Reference video handling ----------
     function setVideoFile(file) {
@@ -146,7 +152,7 @@
         fileInput.value = '';
     });
     // Typing (or clearing) a URL flips the subtask just as an upload does.
-    urlInput.addEventListener('input', () => refreshControls());
+    urlInput.addEventListener('input', scheduleRefreshControls);
     // Pasting a local file targets the video composer: a clip in edit mode, an image
     // into the first empty keyframe slot in frame mode.
     window.addEventListener('paste', (e) => {
@@ -229,33 +235,59 @@
     });
 
     // ---------- Mode switching ----------
-    /**
-     * Which upstream subtask the current inputs imply. Mirrors videoSubtask() on the
-     * server; the server is still the authority, this only drives what the composer
-     * offers so we never show a control the API would reject.
-     */
-    function currentSubtask() {
-        if (mode === 'firstLast') return 'first_last';
-        return (videoFile || urlInput.value.trim()) ? 'edit' : 'reference';
+    // What the composer holds, described for POST /api/video/plan (no bytes sent).
+    function composerInputs() {
+        const frames = mode === 'firstLast';
+        return {
+            mode,
+            prompt: promptInput.value,
+            duration: $('vidDurationInput').value,
+            hasVideo: !frames && Boolean(videoFile),
+            refVideoUrl: !frames && !videoFile ? urlInput.value.trim() : '',
+            hasImage: !frames && Boolean(refImageSlot.file),
+            hasFirstFrame: frames && Boolean(firstFrameSlot.file),
+            hasLastFrame: frames && Boolean(lastFrameSlot.file)
+        };
+    }
+
+    let planSeq = 0;
+    async function fetchPlan() {
+        const seq = ++planSeq;
+        const r = await fetch('/api/video/plan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(composerInputs())
+        });
+        const d = await r.json();
+        if (!d.success) throw new Error(d.error || 'Plan failed.');
+        if (seq === planSeq) plan = d;
+        return d;
     }
 
     /**
-     * Show only the parameters the implied subtask actually accepts. A reference clip
-     * dictates ratio and duration; a lone reference image dictates neither; keyframes
-     * dictate the ratio only.
+     * Show only the parameters the server says the implied subtask accepts. A reference
+     * clip dictates ratio and duration; a lone reference image dictates neither;
+     * keyframes dictate the ratio only.
      */
-    function refreshControls() {
-        const sub = currentSubtask();
-        const showRow = sub !== 'edit';
-        genControls.classList.toggle('hidden', !showRow);
-        ratioControl.classList.toggle('hidden', sub !== 'reference');
-        ratioNote.classList.toggle('hidden', sub !== 'first_last');
+    async function refreshControls() {
+        let p;
+        try { p = await fetchPlan(); } catch { return; }
+        if (p !== plan) return; // superseded by a newer change
+        const { accepts } = p;
+        genControls.classList.toggle('hidden', !accepts.ratio && !accepts.duration);
+        ratioControl.classList.toggle('hidden', !accepts.ratio);
+        ratioNote.classList.toggle('hidden', accepts.ratio || !accepts.duration);
 
         // In edit mode the two hints swap depending on whether a clip is in play.
         if (mode === 'edit') {
-            hintEditDetail.classList.toggle('hidden', sub !== 'edit');
-            hintRef.classList.toggle('hidden', sub !== 'reference');
+            hintEditDetail.classList.toggle('hidden', p.subtask !== 'edit');
+            hintRef.classList.toggle('hidden', p.subtask !== 'reference');
         }
+    }
+    let controlsTimer;
+    function scheduleRefreshControls() {
+        clearTimeout(controlsTimer);
+        controlsTimer = setTimeout(refreshControls, 120);
     }
 
     function setMode(next) {
@@ -305,6 +337,32 @@
         const btn = e.target.closest('.seg');
         if (btn) setMode(btn.dataset.mode);
     });
+    // Model, resolution, ratio and duration options come from the server.
+    function fillSelect(id, values, selected, label = (v) => v) {
+        const sel = $(id);
+        sel.innerHTML = '';
+        values.forEach(v => {
+            const opt = document.createElement('option');
+            opt.value = v.id || v; opt.textContent = v.label || label(v);
+            sel.appendChild(opt);
+        });
+        sel.value = selected;
+    }
+    async function loadModes() {
+        const r = await fetch('/api/video/modes');
+        const d = await r.json();
+        if (!d.success) throw new Error(d.error || 'Failed to load video modes.');
+        modes = d;
+        fillSelect('vidModelSelect', d.models, (d.models.find(m => m.default) || d.models[0]).id);
+        fillSelect('vidResolutionSelect', d.resolutions, d.defaultResolution);
+        fillSelect('vidRatioSelect', d.ratios, d.defaultRatio, (v) => (v === 'adaptive' ? 'Adaptive' : v));
+        const dur = $('vidDurationInput');
+        dur.min = d.duration.min; dur.max = d.duration.max; dur.value = d.duration.default;
+        $('vidAudioToggle').checked = d.defaults.generateAudio;
+        $('vidWatermarkToggle').checked = d.defaults.watermark;
+    }
+    loadModes().catch(e => showToast('Failed to load video options: ' + e.message, 'error'));
+
     // The markup already ships in edit state; running setMode once anyway keeps the
     // DOM and `mode` from drifting apart if either side is edited later.
     setMode(mode);
@@ -378,19 +436,16 @@
             showToast('Video editing is not configured on the server.', 'error');
             return;
         }
-        const sub = currentSubtask();
-        const frames = sub === 'first_last';
+        // Ask the server first: a request it would refuse never becomes a card.
+        let p;
+        try { p = await fetchPlan(); } catch (e) { showToast('Network error — see console.', 'error'); videoLog('error', 'plan', e); return; }
+        if (!p.ready) {
+            showToast(p.problems[0].message, 'error');
+            if (p.problems[0].message.includes('instruction') || p.problems[0].message.includes('prompt')) promptInput.focus();
+            return;
+        }
+        const frames = mode === 'firstLast';
         const userMessage = promptInput.value.trim();
-        if (!userMessage) {
-            showToast(frames ? 'Describe the motion you want.' : 'Describe your edit.', 'error');
-            promptInput.focus(); return;
-        }
-        if (frames) {
-            if (!firstFrameSlot.file) { showToast('Add a first frame image.', 'error'); return; }
-        } else if (sub === 'reference' && !refImageSlot.file) {
-            // Neither a clip nor an image — edit mode needs one of the two.
-            showToast('Add a reference video or a reference image.', 'error'); return;
-        }
 
         const fd = new FormData();
         fd.append('userMessage', userMessage);
@@ -401,8 +456,8 @@
         fd.append('generateAudio', String($('vidAudioToggle').checked));
         // Only send the parameters this subtask accepts — a stray key fails the whole
         // request upstream rather than being ignored.
-        if (sub !== 'edit') fd.append('duration', $('vidDurationInput').value);
-        if (sub === 'reference') fd.append('ratio', $('vidRatioSelect').value);
+        if (p.accepts.duration) fd.append('duration', $('vidDurationInput').value);
+        if (p.accepts.ratio) fd.append('ratio', $('vidRatioSelect').value);
 
         if (frames) {
             fd.append('firstFrame', firstFrameSlot.file);
@@ -430,6 +485,7 @@
             // Insert the pending record into the gallery list and start polling.
             items.unshift(data.record);
             pending.add(data.taskId);
+            pendingIds.add(data.taskId);
             renderGallery();
             pollTask(data.taskId, card);
         } catch (e) {
@@ -442,47 +498,46 @@
     generateBtn.addEventListener('click', generate);
 
     // ---------- Polling ----------
+    // The server decides when a task is finished, why it failed, and how long to wait
+    // before the next poll. The only rule kept here is retrying when the server itself
+    // can't be reached (or says the failure was transient) — it can't answer then.
+    const UNREACHABLE_RETRY_MS = 10000;
+    const UNREACHABLE_MAX_ATTEMPTS = 12;
     async function pollTask(taskId, card) {
         cardSetStatus(card, 'generating…');
         let attempts = 0;
         const tick = async () => {
             attempts++;
             try {
-                const r = await fetch(`/api/video/tasks/${encodeURIComponent(taskId)}`);
+                const r = await fetch(`/api/video/tasks/${encodeURIComponent(taskId)}?attempt=${attempts}`);
                 const data = await r.json();
                 if (!r.ok || !data.success) {
+                    if (data.retryable && attempts < UNREACHABLE_MAX_ATTEMPTS) { setTimeout(tick, UNREACHABLE_RETRY_MS); return; }
                     cardError(card, data.error || 'Polling failed.', { taskId });
                     pending.delete(taskId);
                     syncLocalRecord(taskId, { status: 'failed' });
                     renderGallery();
                     return;
                 }
-                const status = (data.status || (data.task && data.task.status) || 'queued');
-                if (status === 'succeeded') {
+                if (data.terminal) {
                     pending.delete(taskId);
-                    card.remove();
+                    pendingIds.delete(taskId);
                     if (data.record) { updateLocalRecord(taskId, data.record); }
-                    renderGallery();
-                    showToast('Video edit ready.', 'success');
-                    return;
-                }
-                if (status === 'failed') {
-                    const reason = (data.task && data.task.error)
-                        ? (data.task.error.message || data.task.error.code || JSON.stringify(data.task.error))
-                        : 'Generation failed upstream.';
-                    pending.delete(taskId);
-                    cardError(card, reason, { taskId });
-                    syncLocalRecord(taskId, { status: 'failed' });
+                    if (data.failureReason) {
+                        cardError(card, data.failureReason, { taskId });
+                    } else {
+                        card.remove();
+                        showToast('Video edit ready.', 'success');
+                    }
                     renderGallery();
                     return;
                 }
+                const status = data.status;
                 cardSetStatus(card, status === 'running' ? 'rendering…' : (status === 'queued' ? 'queued…' : status));
-                // Scale the interval as the task ages (5s → 10s → 20s).
-                const delay = attempts < 6 ? 5000 : attempts < 20 ? 10000 : 20000;
-                setTimeout(tick, delay);
+                setTimeout(tick, data.nextPollMs);
             } catch (e) {
                 // Transient network blips: keep polling a few times before giving up.
-                if (attempts < 12) { setTimeout(tick, 10000); return; }
+                if (attempts < UNREACHABLE_MAX_ATTEMPTS) { setTimeout(tick, UNREACHABLE_RETRY_MS); return; }
                 cardError(card, 'Stopped polling: ' + (e && e.stack ? e.stack : e && e.message ? e.message : String(e)), {});
                 pending.delete(taskId);
             }
@@ -493,7 +548,7 @@
     /** Re-poll any pending task that survived a refresh/reload (idempotent). */
     function resumePending() {
         for (const it of items) {
-            if (it.status === 'queued' || it.status === 'running') {
+            if (pendingIds.has(it.id)) {
                 if (pending.has(it.id)) continue;
                 pending.add(it.id);
                 const card = makeCard(it.id, it.prompt);
@@ -521,7 +576,7 @@
         try {
             const r = await fetch('/api/video/gallery');
             const d = await r.json();
-            if (d.success) { items = d.items; renderGallery(); resumePending(); }
+            if (d.success) { items = d.items; pendingIds = new Set(d.pendingIds); renderGallery(); resumePending(); }
         } catch (e) { showToast('Failed to load videos.', 'error'); }
     }
 
@@ -542,8 +597,8 @@
     function renderCard(it) {
         const div = document.createElement('div');
         div.className = 'gallery-item gallery-item-video';
-        const isPending = it.status !== 'succeeded' && it.status !== 'failed';
         const failed = it.status === 'failed';
+        const isPending = pendingIds.has(it.id) && !failed;
 
         const poster = posterFor(it);
         const media = (isPending || failed) ? `<div class="video-placeholder ${failed ? 'failed' : ''}">

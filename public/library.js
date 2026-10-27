@@ -173,11 +173,8 @@
 
     restoreBtn.addEventListener('click', async () => {
         if (!editing) return;
+        // The server refuses to restore the current version; its message is shown below.
         const ver = parseInt(versionSelect.value, 10);
-        if (ver === editing.currentVersion) {
-            showToast('That is already the current version.', 'error');
-            return;
-        }
         try {
             const r = await fetch(`/api/prompts/${editing.id}/restore/${ver}`, { method: 'POST' });
             const d = await r.json();
@@ -197,10 +194,9 @@
     });
 
     saveBtn.addEventListener('click', async () => {
+        // Title and body rules are the server's; a refusal comes back as the error below.
         const title = titleInput.value.trim();
         const body = bodyInput.value;
-        if (!title) { showToast('Title required.', 'error'); titleInput.focus(); return; }
-        if (!body.trim()) { showToast('Body required.', 'error'); bodyInput.focus(); return; }
 
         try {
             let res;

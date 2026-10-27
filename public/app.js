@@ -1,62 +1,22 @@
-// ============ Constants ============
-// Per-model image configuration. The "endpoint" model resolves to the Seedream
-// endpoint ID configured on the server (.env ENDPOINT_ID); every other entry is a
-// ModelArk model ID forwarded verbatim. Resolutions and exact pixel dimensions
-// differ between models (e.g. 5.0 Pro tops out at 2K, 4.5 reaches 4K), so the
-// matrix is keyed per model.
-const SEEDREAM_MODELS = {
-    endpoint: {
-        label: 'Seedream 4.5 (endpoint)',
-        resolutions: ['2K', '4K'],
-        defaultResolution: '4K',
-        // outputFormat null → let the endpoint default (jpeg)
-        outputFormat: null,
-        matrix: {
-            '2K': {
-                '1:1': '2048x2048', '4:3': '2304x1728', '3:4': '1728x2304',
-                '16:9': '2848x1600', '9:16': '1600x2848', '3:2': '2496x1664',
-                '2:3': '1664x2496', '21:9': '3136x1344'
-            },
-            '4K': {
-                '1:1': '4096x4096', '4:3': '4704x3520', '3:4': '3520x4704',
-                '16:9': '5504x3040', '9:16': '3040x5504', '3:2': '4992x3328',
-                '2:3': '3328x4992', '21:9': '6240x2656'
-            }
-        }
-    },
-    'dola-seedream-5-0-pro-260628': {
-        label: 'Seedream 5.0 Pro',
-        resolutions: ['1K', '1.5K', '2K'],
-        defaultResolution: '2K',
-        // 5.0 Pro supports png & jpeg; pin jpeg so gallery files stay consistent.
-        outputFormat: 'jpeg',
-        matrix: {
-            '1K': {
-                '1:1': '1024x1024', '4:3': '1152x864', '3:4': '864x1152',
-                '16:9': '1424x800', '9:16': '800x1424', '3:2': '1248x832',
-                '2:3': '832x1248', '21:9': '1568x672'
-            },
-            '1.5K': {
-                '1:1': '1536x1536', '4:3': '1792x1344', '3:4': '1344x1792',
-                '16:9': '2048x1152', '9:16': '1152x2048', '3:2': '1872x1248',
-                '2:3': '1248x1872', '21:9': '2352x1008'
-            },
-            '2K': {
-                '1:1': '2048x2048', '4:3': '2368x1776', '3:4': '1776x2368',
-                '16:9': '2816x1584', '9:16': '1584x2816', '3:2': '2496x1664',
-                '2:3': '1664x2496', '21:9': '3136x1344'
-            }
-        }
-    }
-};
+// ============ Catalogue ============
+// Models, resolutions, ratios and limits come from the server (GET /api/models, the
+// same data as `ai-media-studio models`); the browser computes no sizes itself.
+let catalogue = null;
+async function loadCatalogue() {
+    const r = await fetch('/api/models');
+    const d = await r.json();
+    if (!d.success) throw new Error(d.error || 'Failed to load models.');
+    catalogue = d.image;
+}
 
 // ============ State ============
 const state = {
     inputFiles: [],   // File[]
     gallery: [],      // manifest items
     searchTerm: '',
-    slotValues: {},   // { name: currentValue }
-    slotDefaults: {}, // { name: defaultValue }
+    slotValues: {},   // { name: currentValue } — what the user typed into each chip
+    slotDefaults: {}, // { name: defaultValue } — as last reported by the server
+    compiled: null,   // { template, text, segments } from the last /api/prompts/compile
     activePrompt: null, // { id, title, currentVersion } when editing a saved prompt
     videoEnabled: false,
     videoUploadsEnabled: false
@@ -196,15 +156,16 @@ tabStrip.addEventListener('click', (e) => {
 // ============ File handling ============
 function addFiles(fileList) {
     const incoming = Array.from(fileList).filter(f => f.type.startsWith('image/'));
-    const room = 9 - state.inputFiles.length;
+    const max = catalogue ? catalogue.maxReferenceImages : 9;
+    const room = max - state.inputFiles.length;
     if (room <= 0) {
-        showToast('Maximum 9 images.', 'error');
+        showToast(`Maximum ${max} images.`, 'error');
         return;
     }
     const accepted = incoming.slice(0, room);
     const rejected = incoming.length - accepted.length;
     state.inputFiles.push(...accepted);
-    if (rejected > 0) showToast(`Added ${accepted.length}, dropped ${rejected} (max 9).`, 'error');
+    if (rejected > 0) showToast(`Added ${accepted.length}, dropped ${rejected} (max ${max}).`, 'error');
     renderThumbs();
 }
 
@@ -270,8 +231,10 @@ window.addEventListener('paste', (e) => {
 });
 
 // ============ Generation ============
-function currentModelKey() { return modelSelect.value || 'endpoint'; }
-function currentModelCfg() { return SEEDREAM_MODELS[currentModelKey()] || SEEDREAM_MODELS.endpoint; }
+function currentModelKey() { return modelSelect.value || catalogue.defaultModel; }
+function currentModelCfg() {
+    return catalogue.models.find(m => m.id === currentModelKey()) || catalogue.models[0];
+}
 
 // Populate the resolution dropdown for the selected model, preserving the current
 // choice when it is still valid and falling back to the model default otherwise.
@@ -289,24 +252,23 @@ function syncResolutionOptions() {
 
 function populateModels() {
     modelSelect.innerHTML = '';
-    Object.entries(SEEDREAM_MODELS).forEach(([key, cfg]) => {
+    catalogue.models.forEach(m => {
         const opt = document.createElement('option');
-        opt.value = key; opt.textContent = cfg.label;
+        opt.value = m.id; opt.textContent = m.label;
         modelSelect.appendChild(opt);
     });
     // Default to the configured endpoint (keeps existing behaviour).
-    modelSelect.value = 'endpoint';
+    modelSelect.value = catalogue.defaultModel;
+    ratioSelect.innerHTML = '';
+    catalogue.ratios.forEach(r => {
+        const opt = document.createElement('option');
+        opt.value = r.id; opt.textContent = r.label;
+        ratioSelect.appendChild(opt);
+    });
+    ratioSelect.value = catalogue.defaultRatio;
     syncResolutionOptions();
 }
 modelSelect.addEventListener('change', syncResolutionOptions);
-
-function buildSize() {
-    const cfg = currentModelCfg();
-    const res = resolutionSelect.value;
-    const ratio = ratioSelect.value;
-    if (ratio === 'auto') return res;
-    return cfg.matrix[res]?.[ratio] || res;
-}
 
 function makeJobCard(jobId, prompt) {
     const card = document.createElement('div');
@@ -331,24 +293,21 @@ function jobCardError(card, msg) {
 }
 
 async function generate() {
-    const rawPrompt = promptInput.value.trim();
-    if (!rawPrompt) {
-        showToast('Please enter a prompt.', 'error');
-        promptInput.focus();
-        return;
-    }
-    const prompt = compilePrompt(rawPrompt);
+    // The server compiles the template with the chip values and computes the pixel
+    // size from model + resolution + ratio; it also decides what is valid.
+    const template = promptInput.value;
+    const preview = (state.compiled && state.compiled.template === template) ? state.compiled.text : template;
 
     const jobId = crypto.randomUUID();
-    const card = makeJobCard(jobId, prompt);
+    const card = makeJobCard(jobId, preview.trim());
     processingPool.prepend(card);
 
     const fd = new FormData();
-    fd.append('prompt', prompt);
+    fd.append('prompt', template);
+    fd.append('slots', JSON.stringify(state.slotValues));
     fd.append('model', currentModelKey());
-    fd.append('size', buildSize());
-    const outFmt = currentModelCfg().outputFormat;
-    if (outFmt) fd.append('output_format', outFmt);
+    fd.append('resolution', resolutionSelect.value);
+    fd.append('ratio', ratioSelect.value);
     fd.append('watermark', String(watermarkToggle.checked));
     state.inputFiles.forEach(f => fd.append('images', f));
 
@@ -357,6 +316,13 @@ async function generate() {
         const data = await r.json();
         if (!r.ok || !data.success) {
             const msg = typeof data.error === 'string' ? data.error : JSON.stringify(data.error || 'Unknown error');
+            // A request the server refused outright never started: no error card.
+            if (data.code === 'VALIDATION') {
+                card.remove();
+                showToast(msg, 'error');
+                promptInput.focus();
+                return;
+            }
             jobCardError(card, truncate(msg, 140));
             showToast('Generation failed: ' + truncate(msg, 80), 'error');
             return;
@@ -460,7 +426,8 @@ function openLightbox(item) {
     lbRatio.textContent = item.requestedSize || '—';
     lbCreated.textContent = new Date(item.createdAt).toLocaleString();
     lbDownload.href = item.outputPath;
-    lbDownload.download = `seedream-${item.id}.jpeg`;
+    const ext = (item.outputPath.match(/\.[A-Za-z0-9]+$/) || ['.jpeg'])[0];
+    lbDownload.download = `seedream-${item.id}${ext}`;
     if (item.inputThumbs && item.inputThumbs.length) {
         lbInputs.innerHTML = `<div class="input-thumbs">${item.inputThumbs.map(p => `<img src="${p}" alt="">`).join('')}</div>`;
     } else {
@@ -556,63 +523,64 @@ function escapeHtml(s) {
 }
 function truncate(s, n) { return s.length <= n ? s : s.slice(0, n - 1) + '…'; }
 
-// ============ Slot / Template engine ============
-// Syntax: {{name:default}} or {{name}} (default is empty)
-// Duplicate names share one input. First occurrence's default is used if defaults differ.
-const SLOT_RE = /\{\{\s*([A-Za-z0-9_\-]+)\s*(?::([^}]*))?\}\}/g;
-
-function parseSlots(template) {
-    const order = [];
-    const defaults = {};
-    let m;
-    SLOT_RE.lastIndex = 0;
-    while ((m = SLOT_RE.exec(template)) !== null) {
-        const name = m[1];
-        const def = m[2] !== undefined ? m[2] : '';
-        if (!(name in defaults)) {
-            defaults[name] = def;
-            order.push(name);
-        }
-    }
-    return { order, defaults };
-}
-
-function compilePrompt(template) {
-    return template.replace(SLOT_RE, (_match, name) => {
-        // Empty string means "intentionally empty" — only fall back to the default
-        // when the user has never touched this slot (value is undefined).
-        const v = state.slotValues[name];
-        return v !== undefined ? v : (state.slotDefaults[name] || '');
-    });
-}
-
-function refreshSlots({ resetValues = false } = {}) {
+// ============ Slots ============
+// {{name:default}} templates are parsed and compiled by the server
+// (POST /api/prompts/compile, the same as `ai-media-studio prompts compile`); this file
+// only renders the chips and the highlighted preview it returns.
+let compileSeq = 0;
+async function compileTemplate(values) {
     const template = promptInput.value;
-    const { order, defaults } = parseSlots(template);
+    const seq = ++compileSeq;
+    const r = await fetch('/api/prompts/compile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: template, values })
+    });
+    const d = await r.json();
+    if (seq !== compileSeq) return null; // a newer edit superseded this one
+    if (!d.success) throw new Error(d.error);
+    state.compiled = { template, text: d.text, segments: d.segments };
+    return d;
+}
 
-    if (order.length === 0) {
+async function refreshSlots({ resetValues = false } = {}) {
+    let d;
+    try {
+        d = await compileTemplate(resetValues ? {} : state.slotValues);
+    } catch (e) {
+        showToast('Could not read prompt variables: ' + e.message, 'error');
+        return;
+    }
+    if (!d) return;
+
+    if (d.slots.length === 0) {
         slotsRow.classList.add('hidden');
         state.slotValues = {};
         state.slotDefaults = {};
         return;
     }
 
-    state.slotDefaults = defaults;
-    if (resetValues) {
-        state.slotValues = { ...defaults };
-    } else {
-        // Keep values for vars that still exist; drop the rest; add new ones from defaults
-        const next = {};
-        for (const name of order) {
-            next[name] = (name in state.slotValues) ? state.slotValues[name] : defaults[name];
-        }
-        state.slotValues = next;
-    }
+    state.slotDefaults = Object.fromEntries(d.slots.map(sl => [sl.name, sl.default]));
+    state.slotValues = d.values;
 
-    renderSlots(order);
+    renderSlots(d.slots.map(sl => sl.name));
     slotsRow.classList.remove('hidden');
-    slotsHint.textContent = `(${order.length})`;
+    slotsHint.textContent = `(${d.slots.length})`;
     renderCompiledPreview();
+}
+
+let slotsTimer;
+function scheduleRefreshSlots() {
+    clearTimeout(slotsTimer);
+    slotsTimer = setTimeout(() => refreshSlots(), 120);
+}
+
+let previewTimer;
+function schedulePreview() {
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(async () => {
+        try { if (await compileTemplate(state.slotValues)) renderCompiledPreview(); } catch { /* next edit retries */ }
+    }, 120);
 }
 
 function renderSlots(order) {
@@ -638,7 +606,7 @@ function renderSlots(order) {
             state.slotValues[name] = input.value;
             autosize();
             chip.classList.toggle('dirty', input.value !== def);
-            renderCompiledPreview();
+            schedulePreview();
         });
         chip.appendChild(input);
 
@@ -657,7 +625,7 @@ function renderSlots(order) {
                 state.slotValues[name] = def;
                 chip.classList.remove('dirty');
                 autosize();
-                renderCompiledPreview();
+                schedulePreview();
                 input.focus();
             });
             chip.appendChild(restore);
@@ -669,29 +637,16 @@ function renderSlots(order) {
     });
 }
 
+// Highlight filled regions, from the segments the server returned.
 function renderCompiledPreview() {
-    const compiled = compilePrompt(promptInput.value);
-    // Highlight filled regions
-    const template = promptInput.value;
-    let html = '';
-    let lastIdx = 0;
-    SLOT_RE.lastIndex = 0;
-    let m;
-    while ((m = SLOT_RE.exec(template)) !== null) {
-        html += escapeHtml(template.slice(lastIdx, m.index));
-        const name = m[1];
-        const v = state.slotValues[name] !== undefined
-            ? state.slotValues[name]
-            : (state.slotDefaults[name] || '');
-        html += `<span class="filled">${escapeHtml(v)}</span>`;
-        lastIdx = m.index + m[0].length;
-    }
-    html += escapeHtml(template.slice(lastIdx));
+    const segments = (state.compiled && state.compiled.template === promptInput.value) ? state.compiled.segments : [];
+    const html = segments.map(seg => (seg.slot !== undefined
+        ? `<span class="filled">${escapeHtml(seg.value)}</span>`
+        : escapeHtml(seg.text))).join('');
     compiledPreview.innerHTML = html || '<em class="hint">empty</em>';
-    return compiled;
 }
 
-promptInput.addEventListener('input', () => refreshSlots());
+promptInput.addEventListener('input', scheduleRefreshSlots);
 resetSlotsBtn.addEventListener('click', () => refreshSlots({ resetValues: true }));
 
 // ============ Active prompt + Save to library ============
@@ -709,7 +664,6 @@ detachPromptBtn.addEventListener('click', () => setActivePrompt(null));
 
 saveToLibBtn.addEventListener('click', async () => {
     const body = promptInput.value.trim();
-    if (!body) { showToast('Prompt is empty.', 'error'); return; }
 
     if (state.activePrompt) {
         // Update existing
@@ -729,7 +683,7 @@ saveToLibBtn.addEventListener('click', async () => {
         }
     } else {
         const title = prompt('Title for this prompt:');
-        if (!title || !title.trim()) return;
+        if (title === null) return; // dialog cancelled
         try {
             const r = await fetch('/api/prompts', {
                 method: 'POST',
@@ -763,7 +717,9 @@ window.Studio = {
 };
 
 // ============ Init ============
-populateModels();
+loadCatalogue()
+    .then(populateModels)
+    .catch(e => showToast('Failed to load models: ' + e.message, 'error'));
 checkHealth();
 loadGallery();
 // When panic is lifted, pull the full stored history in (this replaces the

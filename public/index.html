@@ -69,24 +69,11 @@
             <div class="row">
                 <div class="control">
                     <label for="resolutionSelect">Resolution</label>
-                    <select id="resolutionSelect">
-                        <option value="2K">2K</option>
-                        <option value="4K" selected>4K</option>
-                    </select>
+                    <select id="resolutionSelect"></select>
                 </div>
                 <div class="control">
                     <label for="ratioSelect">Aspect ratio</label>
-                    <select id="ratioSelect">
-                        <option value="auto">Auto (let model decide)</option>
-                        <option value="1:1">1:1 Square</option>
-                        <option value="4:3">4:3 Landscape</option>
-                        <option value="3:4" selected>3:4 Portrait</option>
-                        <option value="16:9">16:9 Wide</option>
-                        <option value="9:16">9:16 Tall</option>
-                        <option value="3:2">3:2 Landscape</option>
-                        <option value="2:3">2:3 Portrait</option>
-                        <option value="21:9">21:9 Cinema</option>
-                    </select>
+                    <select id="ratioSelect"></select>
                 </div>
                 <div class="control toggle">
                     <label for="watermarkToggle">Watermark</label>
@@ -226,26 +213,20 @@
             </div>
 
             <!-- Which of these apply depends on the subtask, and the API rejects the whole
-                 request on a parameter it doesn't accept:
+                 request on a parameter it doesn't accept. The server says which ones the
+                 current inputs accept (POST /api/video/plan):
                    reference clip  → both dictated by the clip; row hidden entirely
                    image only      → both are real, honoured inputs
-                   first/last      → duration is ours, ratio follows the first frame -->
+                   first/last      → duration is ours, ratio follows the first frame
+                 The option lists come from GET /api/video/modes. -->
             <div class="row hidden" id="vidGenControls" style="margin-top:14px">
                 <div class="control">
                     <label for="vidDurationInput">Duration <span class="hint">(4–30s)</span></label>
-                    <input type="number" id="vidDurationInput" min="4" max="30" step="1" value="5">
+                    <input type="number" id="vidDurationInput" step="1">
                 </div>
                 <div class="control" id="vidRatioControl">
                     <label for="vidRatioSelect">Aspect ratio</label>
-                    <select id="vidRatioSelect">
-                        <option value="16:9" selected>16:9</option>
-                        <option value="9:16">9:16</option>
-                        <option value="1:1">1:1</option>
-                        <option value="4:3">4:3</option>
-                        <option value="3:4">3:4</option>
-                        <option value="21:9">21:9</option>
-                        <option value="adaptive">Adaptive</option>
-                    </select>
+                    <select id="vidRatioSelect"></select>
                 </div>
                 <div class="control hidden" id="vidRatioNote">
                     <label>Aspect ratio</label>
@@ -256,17 +237,11 @@
             <div class="row" style="margin-top:14px">
                 <div class="control">
                     <label for="vidModelSelect">Model</label>
-                    <select id="vidModelSelect">
-                        <option value="dreamina-seedance-2-5-260628" selected>Seedance 2.5</option>
-                    </select>
+                    <select id="vidModelSelect"></select>
                 </div>
                 <div class="control">
                     <label for="vidResolutionSelect">Resolution</label>
-                    <select id="vidResolutionSelect">
-                        <option value="1080p" selected>1080p</option>
-                        <option value="720p">720p</option>
-                        <option value="480p">480p</option>
-                    </select>
+                    <select id="vidResolutionSelect"></select>
                 </div>
             </div>
 
