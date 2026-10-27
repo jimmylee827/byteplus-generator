@@ -94,11 +94,22 @@ describe('image record and files', () => {
         assert.equal(dl.url, 'https://mock.cdn/x.jpeg');
     });
 
-    it('concurrent generations get unique ids', async () => {
-        const rs = await Promise.all(Array.from({ length: 6 }, (_, i) => generate({ prompt: `c${i}` })));
+    it('concurrent generations all succeed, with unique ids, and are all recorded', async (t) => {
+        if (srv.target === 'legacy') {
+            // Legacy bug: the manifest is rewritten in place without a lock, so a
+            // concurrent reader can see a half-written file and the request fails with a
+            // JSON parse error after the image was already downloaded. Fixed by the
+            // locked, atomic store.
+            t.skip('legacy manifest writes race (see comment)');
+            return;
+        }
+        const rs = await Promise.all(Array.from({ length: 12 }, (_, i) => generate({ prompt: `c${i}` })));
+        assert.deepEqual(rs.map(r => r.status), rs.map(() => 200));
         const ids = rs.map(r => r.body.item.id);
         assert.equal(new Set(ids).size, ids.length);
         for (const id of ids) assert.match(id, ID_RE);
+        const recorded = new Set(JSON.parse(fs.readFileSync(path.join(srv.dataDir, 'gallery', 'manifest.json'), 'utf-8')).items.map(i => i.id));
+        for (const id of ids) assert.ok(recorded.has(id), `record ${id} missing from the manifest`);
     });
 });
 

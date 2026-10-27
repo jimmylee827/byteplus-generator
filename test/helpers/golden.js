@@ -22,7 +22,7 @@ function expectUpstream(name, entry) {
         body: entry.raw === null ? null : JSON.parse(normalizeRaw(entry.raw))
     };
     if (process.env.UPDATE_GOLDENS === '1') {
-        if ((process.env.TEST_TARGET || 'legacy') !== 'legacy') {
+        if (process.env.TEST_TARGET !== 'legacy') {
             throw new Error('Goldens may only be recorded from the legacy code (TEST_TARGET=legacy).');
         }
         fs.mkdirSync(DIR, { recursive: true });

@@ -1,4 +1,5 @@
-// Starts a server under test in its own temp data dir, with fetch mocked.
+// Starts a server under test in its own temp data dir (or a shared one, to test several
+// processes on one data folder), with fetch mocked.
 //
 // target 'legacy'  — the pre-refactor code, read straight from git at BASELINE and run
 //                    from a temp copy (its ROOT is __dirname, so the copy's folders are
@@ -51,9 +52,11 @@ function extractBaseline(dir) {
     fs.symlinkSync(path.join(REPO, 'node_modules'), path.join(dir, 'node_modules'), 'dir');
 }
 
-function createMockControl(dir) {
-    fs.writeFileSync(path.join(dir, 'rules.json'), '[]');
-    fs.writeFileSync(path.join(dir, 'log.jsonl'), '');
+function createMockControl(dir, { reset = true } = {}) {
+    if (reset || !fs.existsSync(path.join(dir, 'rules.json'))) {
+        fs.writeFileSync(path.join(dir, 'rules.json'), '[]');
+        fs.writeFileSync(path.join(dir, 'log.jsonl'), '');
+    }
     return {
         dir,
         /** Queue scripted responses; each is consumed by the first matching request. */
@@ -87,16 +90,16 @@ async function waitForHealth(url, proc, output) {
     throw new Error(`server did not become healthy:\n${output()}`);
 }
 
-async function startServer({ env = {}, target = process.env.TEST_TARGET || 'legacy' } = {}) {
+async function startServer({ env = {}, target = process.env.TEST_TARGET || 'current', dataDir: sharedDataDir, mockDir: sharedMockDir } = {}) {
     const port = await freePort();
-    const mockDir = makeTmp('ams-mock-');
+    const mockDir = sharedMockDir || makeTmp('ams-mock-');
     let cwd, dataDir, script;
     if (target === 'legacy') {
         cwd = dataDir = makeTmp('ams-legacy-');
         extractBaseline(cwd);
         script = path.join(cwd, 'server.js');
     } else {
-        dataDir = makeTmp('ams-data-');
+        dataDir = sharedDataDir || makeTmp('ams-data-');
         cwd = dataDir; // no .env here, so dotenv loads nothing
         script = path.join(REPO, 'server.js');
     }
@@ -105,6 +108,8 @@ async function startServer({ env = {}, target = process.env.TEST_TARGET || 'lega
         ...TEST_ENV,
         PORT: String(port),
         AI_MEDIA_STUDIO_DATA_DIR: dataDir,
+        // Never let the server under test read the real .env.
+        AI_MEDIA_STUDIO_ENV_FILE: path.join(dataDir, '.env'),
         MOCK_FETCH_DIR: mockDir,
         NODE_OPTIONS: `--require ${MOCK}`,
         ...env
@@ -121,13 +126,28 @@ async function startServer({ env = {}, target = process.env.TEST_TARGET || 'lega
         port,
         dataDir,
         target,
-        mock: createMockControl(mockDir),
+        mockDir,
+        mock: createMockControl(mockDir, { reset: !sharedMockDir }),
         output: () => out,
         async stop() {
             if (proc.exitCode !== null) return;
             await new Promise(resolve => { proc.once('exit', resolve); proc.kill('SIGTERM'); });
         }
     };
+}
+
+// Fields the refactor added to responses. Characterisation tests compare the legacy
+// shape, so `call` strips these from `body` and keeps the untouched response in `full`.
+const ADDED_TOP = ['code', 'terminal', 'failureReason', 'nextPollMs', 'pendingIds', 'retryable'];
+function legacyView(body) {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
+    const out = { ...body };
+    for (const k of ADDED_TOP) delete out[k];
+    const strip = (r) => { if (r && typeof r === 'object') { const c = { ...r }; delete c.paths; return c; } return r; };
+    if (out.item) out.item = strip(out.item);
+    if (out.record) out.record = strip(out.record);
+    if (Array.isArray(out.items)) out.items = out.items.map(strip);
+    return out;
 }
 
 /** Small client: json body, multipart form ({field: string | {name, type, bytes}} or arrays), or nothing. */
@@ -150,7 +170,7 @@ async function call(server, method, route, { json, form } = {}) {
     const text = await r.text();
     let body;
     try { body = JSON.parse(text); } catch { body = text; }
-    return { status: r.status, body };
+    return { status: r.status, body: legacyView(body), full: body };
 }
 
 // Deterministic fake uploads.
@@ -160,4 +180,4 @@ const FILES = {
     mp4: (name = 'clip.mp4', size = 64) => ({ name, type: 'video/mp4', bytes: Buffer.alloc(size, 7) })
 };
 
-module.exports = { startServer, call, FILES, TEST_ENV, REPO, BASELINE, makeTmp };
+module.exports = { startServer, call, FILES, TEST_ENV, REPO, BASELINE, makeTmp, legacyView };

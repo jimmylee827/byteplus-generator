@@ -12,6 +12,9 @@ videos/
 prompts/
 archive/
 
+# Shared runtime state: key rotation, tunnel address, locks (hashes only, never keys)
+.state/
+
 # Scratch / debug artifacts
 body.json
 *.log

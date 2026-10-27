@@ -10,6 +10,10 @@
 // backoff — publishing each new hostname so callers always read the current one.
 // Nothing here is on the request path; if the tunnel is down, uploads report as
 // unavailable and pasted URLs keep working.
+//
+// Other processes (the CLI, the MCP server) can't see this object, so every change is
+// also written to `statePath` (.state/tunnel.json) with the owner's pid. They trust
+// the URL there only while that pid is alive — see core/publicUrl.js.
 const { spawn } = require('child_process');
 const fs = require('fs');
 const fsp = require('fs/promises');
@@ -24,8 +28,9 @@ class Tunnel {
     //  - named: `name` + `hostname` run YOUR pre-created tunnel on your own domain.
     //    The hostname is fixed and known up front, so it's published immediately
     //    rather than scraped from stdout, and it survives every reconnect.
-    constructor({ port, envPath, writeEnv = true, log = console, name = null, hostname = null }) {
+    constructor({ port, envPath, writeEnv = true, log = console, name = null, hostname = null, statePath = null }) {
         this.port = port;
+        this.statePath = statePath;
         this.envPath = envPath;
         this.writeEnv = writeEnv;
         this.log = log;
@@ -48,6 +53,7 @@ class Tunnel {
     _publish(url) {
         if (this.url === url) return;
         this.url = url;
+        this._writeState(url ? 'up' : 'down');
         for (const fn of this.listeners) {
             try { fn(url); } catch (e) { this.log.error('[TUNNEL] listener failed:', e.message); }
         }
@@ -78,8 +84,30 @@ class Tunnel {
         await fsp.rename(tmp, this.envPath);
     }
 
+    // Written synchronously (temp file + rename) so it is current even when called from
+    // a signal handler on the way out.
+    _writeState(status) {
+        if (!this.statePath) return;
+        try {
+            fs.mkdirSync(path.dirname(this.statePath), { recursive: true });
+            const tmp = `${this.statePath}.${process.pid}.tmp`;
+            fs.writeFileSync(tmp, JSON.stringify({
+                status,
+                url: status === 'up' ? this.url : null,
+                mode: this.named ? 'named' : 'quick',
+                ownerPid: process.pid,
+                port: this.port,
+                updatedAt: new Date().toISOString()
+            }, null, 2));
+            fs.renameSync(tmp, this.statePath);
+        } catch (e) {
+            this.log.error('[TUNNEL] could not write tunnel state:', e.message);
+        }
+    }
+
     start() {
         if (this.stopped) return;
+        this._writeState('starting');
         this._spawn();
     }
 
@@ -146,6 +174,7 @@ class Tunnel {
                     '(brew install cloudflared) or set PUBLIC_BASE_URL manually. ' +
                     'Uploads stay disabled; pasted URLs still work.');
                 this.stopped = true; // no point retrying a missing binary
+                this._writeState('down');
                 return;
             }
             this.log.error('[TUNNEL] process error:', e.message);
@@ -178,6 +207,7 @@ class Tunnel {
 
     stop() {
         this.stopped = true;
+        this._writeState('down');
         if (this.proc) {
             try { this.proc.kill('SIGTERM'); } catch { /* already gone */ }
             this.proc = null;

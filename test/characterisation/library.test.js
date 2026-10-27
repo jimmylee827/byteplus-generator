@@ -112,9 +112,9 @@ describe('prompt library', () => {
             await call(srv, 'DELETE', `/api/prompts/${blank.body.item.id}`);
             return;
         }
-        assert.deepEqual([blank.status, blank.body.code], [400, 'VALIDATION']);
+        assert.deepEqual([blank.status, blank.full.code], [400, 'VALIDATION']);
         assert.equal(blank.body.error, 'Body is required.');
-        assert.deepEqual([cur.status, cur.body.code], [400, 'VALIDATION']);
+        assert.deepEqual([cur.status, cur.full.code], [400, 'VALIDATION']);
         assert.equal(cur.body.error, 'That is already the current version.');
     });
 
