@@ -40,6 +40,8 @@ function buildConfig(env = process.env) {
         tunnelStateFile: path.join(stateDir, 'tunnel.json'),
 
         endpointId: env.ENDPOINT_ID || '',
+        // Which model ENDPOINT_ID serves — only used to price it (core/models.js).
+        endpointBaseModel: (env.ENDPOINT_BASE_MODEL || 'seedream-4-5-251128').trim(),
         apiKeys: (env.BYTEPLUS_API_KEYS || '').split(',').map(k => k.trim()).filter(Boolean),
         port: Number(env.PORT || 3000),
         // Video editing drives Seedance 2.5 via the ModelArk "contents/generations/tasks"
@@ -93,6 +95,7 @@ function describeConfig(config) {
         envFile: config.envFile,
         envFileExists: fs.existsSync(config.envFile),
         endpointId: mask(config.endpointId),
+        endpointBaseModel: config.endpointBaseModel,
         apiKeys: config.apiKeys.map(mask),
         port: config.port,
         videoModel: config.videoModel,

@@ -98,8 +98,12 @@ JSON document; logs and progress go to stderr. `-p -`, `--prompt-file -`,
 | `keys reset [--yes]` | Clear rotation state: re-enables 401-disabled keys and zeroes the counters |
 | `models` | Image and video models, resolutions, ratios, defaults, output formats, pixel sizes |
 | `size --model M --resolution R --ratio A` | The pixel size sent upstream, e.g. `1728x2304` |
-| `image generate (-p TEXT \| --prompt-file F \| --from-prompt ID) [--slot k=v]… [--image PATH]… [--model M] [--resolution R] [--ratio A] [--size WxH] [--format jpeg\|png] [--watermark] [--out DIR] [--dry-run]` | **Billed.** Generate one image and save it to the gallery |
-| `gallery list [--search Q] [--limit N]` · `show ID` · `path ID` · `delete ID [--yes]` | The image gallery |
+| `image generate (-p TEXT \| --prompt-file F \| --from-prompt ID) [--slot k=v]… [--image [ROLE=]PATH]… [--no-legend] [--model M] [--resolution R] [--ratio A] [--size WxH] [--format jpeg\|png] [--watermark] [--seed N] [--group N] [--tag T]… [--meta k=v]… [--out DIR\|FILE] [--dry-run]` | **Billed.** Generate one image, or a group of related images, and save it to the gallery. The result includes its `cost` |
+| `image batch FILE [--concurrency N] [--max-spend USD] [--resume \| --restart] [--tag T]… [--dry-run] [--jsonl]` | **Billed.** Run a file of generate jobs (see [Batches](#batches-cost-and-tags)) |
+| `usage [--since D] [--until D] [--tag T]…` | Image spend from the gallery, per model |
+| `image trim IN [--out F] [--margin %] [--threshold N] [--min-content %] [--pad N] [--background HEX]` · `image tile IMG… --out F [--columns N] [--cell WxH] [--fit contain\|cover]` · `image compare IMG… --out F [--label L]… [--height N]` | Local, free: crop the empty margin around the subject, lay out a gap-free grid, build a labelled review sheet (needs `sharp`) |
+| `gallery list [--search Q] [--tag T]… [--limit N]` · `show ID` · `path ID` · `delete ID [--yes]` | The image gallery |
+| `gallery prune (--tag T \| --older-than D) [--yes]` | Delete by tag and/or age; a dry run unless `--yes` |
 | `prompts list [--search Q]` · `show ID` · `create --title T (--body B \| --body-file F)` · `update ID [--title T] [--body B \| --body-file F]` · `restore ID VERSION` · `delete ID [--yes]` | The prompt library |
 | `prompts slots (ID \| --text T \| --text-file F)` | A template's slots and their defaults |
 | `prompts compile (ID \| --text T \| --text-file F) [--slot k=v]…` | The exact prompt that would be sent |
@@ -134,6 +138,7 @@ Conventions:
 | 5 | Not found | `NOT_FOUND` |
 | 6 | Local video inputs need a public URL and none is live | `UPLOADS_UNAVAILABLE` |
 | 7 | `--timeout` reached while waiting; the task is still running | `WAIT_TIMEOUT` |
+| 8 | Some batch jobs failed or were skipped (details in `summary`); fix and rerun with `--resume` | `BATCH_INCOMPLETE` |
 
 Every failure prints `{ "success": false, "error": "…", "code": "…" }`, which is the same
 shape the HTTP API returns.
@@ -155,6 +160,115 @@ ai-media-studio video create -p "Make it a neon night" --video https://example.c
 # Finish whatever was still rendering when the browser tab closed
 ai-media-studio video resume
 ```
+
+---
+
+## Batches, cost and tags
+
+These features came out of a real production run. An online clothing shop made 463
+images in two days, driving the CLI from its own scripts.
+
+### Cost
+
+- **Every result shows its cost.** Each image result has `cost` in US$
+  (`{ usd, outputUsd, inputUsd, model, priceRead }`), and the same figure is saved on
+  the gallery record. `--dry-run` shows `estimatedCost`.
+- **Where the prices come from.** They are in `IMAGE_PRICES` in
+  [`core/models.js`](core/models.js), copied from the
+  [official ModelArk price table](https://ai.byteplus.com/ark/region:ap-southeast-1/docs/model-pricing)
+  on 2026-10-28. A model with no known price reports `cost: null` and a `costNote`;
+  nothing is guessed.
+- **The endpoint's price.** `ENDPOINT_ID` is priced as the model it serves, which is
+  `ENDPOINT_BASE_MODEL` (default `seedream-4-5-251128`).
+- **Totals.** `ai-media-studio usage [--since D] [--tag T]` adds up spend from the
+  gallery. Images made before costs were recorded are priced from their model, size and
+  number of references, and reported separately as `estimatedUsd`.
+
+| Model | Price per image (read 2026-10-28) |
+|---|---|
+| Seedream 5.0 Pro | $0.045 up to 2.61 MP, $0.09 above (2K at 3:4 is 4.2 MP, so $0.09; 1.5K is $0.045); $0.003 per reference after the first |
+| Seedream 4.5 / 4.0 | $0.04 / $0.03; references free |
+| Seedream 5.0 Lite / Flash | $0.035 / $0.018 |
+
+### Batches
+
+`image batch` runs a jobs file. In JSON Lines, each line takes the same fields as
+`image generate`, plus an optional `id`. A `.json` file instead holds
+`{ "defaults": {…}, "jobs": [ … ] }`. Relative paths are relative to the file.
+
+```bash
+ai-media-studio image batch jobs.jsonl --dry-run              # validate + estimated total
+ai-media-studio image batch jobs.jsonl --concurrency 4 --max-spend 20 --jsonl
+ai-media-studio image batch jobs.jsonl --resume --jsonl       # after a failure or an interruption
+```
+
+- **Concurrency.** `--concurrency` (default 4) is how many jobs run at once.
+- **Spend cap.** `--max-spend` stops before the batch's recorded spend would pass the
+  cap. While a cap is set, a job with no known price is skipped.
+- **Progress file.** Progress goes to `<file>.status.json`, written after every job.
+  Re-running a recorded batch needs `--resume` (skip finished jobs and existing `out`
+  files) or `--restart` (run everything and pay again).
+- **Output.** `--jsonl` prints one line per finished job, then a summary line. `--json`
+  prints one document at the end.
+- **Exit codes.** 0 when every job is done; 8 (`BATCH_INCOMPLETE`) otherwise.
+- **Labels on the images.** Every image is tagged with `meta.batch` and `meta.job`, plus
+  any `--tag`.
+
+### Named references, groups and seeds
+
+- **Named references.** `--image garment=a.jpg --image character=b.jpg …` keeps the
+  order, starts the prompt with "Image 1 is the garment; image 2 is the character.", and
+  saves `inputRoles` on the record. `--no-legend` leaves the prompt alone.
+- **Groups.** `--group N` asks Seedream 4.5, 4.0 or 5.0 Lite for up to N related images
+  in one call (`sequential_image_generation: "auto"`). All of them are saved and linked
+  by `groupId`. It is refused for 5.0 Pro and Flash, and when references + N > 15.
+- **Seeds.** `--seed` is refused for every current Seedream model. None of them has a
+  seed parameter in the
+  [API reference](https://docs.byteplus.com/en/docs/ModelArk/1541523) (last updated
+  2026-10-17); only the 3.0 generation did.
+
+### Tags and cleanup
+
+`--tag T` (repeatable) and `--meta key=value` are saved on the image. Use them with
+`gallery list --tag`, `usage --tag` and `gallery prune --tag T --older-than 30d`.
+`prune` only reports what it would delete until you add `--yes`.
+
+### Cropping and sheets in code
+
+Studio backdrops are not one flat colour: they have gradients, soft shadows and
+vignetting. `image trim` therefore finds the **subject** (strong edges, measured per row
+and per column) instead of one background colour, and keeps a small margin around it:
+
+```bash
+ai-media-studio image trim shot.jpeg --json          # → width/height/trimmed/unchanged
+ai-media-studio image trim shot.jpeg --margin 3 --out tight.png
+```
+
+- `--margin` (default 1.5% of the long edge) is breathing room kept around the subject.
+- `--threshold` (default 16) is how strong an edge must be. Raise it to trim less.
+- `--min-content` (default 4%) is how much of a row or column must be edges to count.
+- Images with transparency are cropped to their opaque pixels.
+- When nothing can be separated (`unchanged: true`) the file is copied through, with a
+  reason. That's the case for a flat image, or a subject that fills the frame.
+
+Measure a 4K image in about a third of a second. `image tile` and `image compare` build
+the multi-view sheets and review collages that the models themselves get wrong.
+
+### Model guide and prompting rules
+
+The Skill ([`skills/ai-media-studio/SKILL.md`](skills/ai-media-studio/SKILL.md)) has
+the model guide (Seedream 4.5 vs 5.0 Pro) and the prompting rules learned in that run.
+In short:
+
+- describe what you want, not "not X";
+- name each reference's role;
+- chain close-ups through the item's own front shot;
+- state framing as an edge ("the frame starts below the neck");
+- pin colours with a hex;
+- always say "exactly ONE person" and "no text";
+- make sheets and grids with `image tile`, not in the prompt.
+
+These are observations, not benchmarks.
 
 ---
 
@@ -270,6 +384,10 @@ ln -s "$(pwd)/skills/ai-media-studio" ~/.claude/skills/ai-media-studio
 | `GET /api/video/tasks/:id` | `video status` | `ai_media_studio_video_status` |
 | — | `video wait` · `video resume` | `…_video_wait` · `…_video_resume` |
 | `GET /api/video/gallery` · `GET /api/video/:id` · `DELETE /api/video/:id` | `video list` · `show` · `delete` | `…_video_list` · `…_video_get` · `…_video_delete` |
+| `POST /api/image/batch` | `image batch` | `…_image_batch` |
+| `GET /api/usage` | `usage` | `…_usage` |
+| `POST /api/gallery/prune` | `gallery prune` | `…_gallery_prune` |
+| `POST /api/image/trim` · `/tile` · `/compare` | `image trim` · `tile` · `compare` | `…_image_trim` · `…_image_tile` · `…_image_compare` |
 
 ### HTTP API notes
 
@@ -282,9 +400,18 @@ ln -s "$(pwd)/skills/ai-media-studio" ~/.claude/skills/ai-media-studio
 - `resolution` and `ratio`, **or** an explicit `size`
 - `output_format`
 - `watermark`
+- `seed`, `group`
+- `imageRoles`: a JSON array aligned with `images`
+- `legend`
+- `tags`: repeated fields or a JSON array
+- `meta`: a JSON object
 - `images`: 0–9 files
 
-It returns `{ success, item }`.
+It returns `{ success, item, cost }`, or `{ success, groupId, items, cost }` for a group.
+
+**JSON routes.** `POST /api/image/batch`, `/api/image/trim|tile|compare` and
+`/api/gallery/prune` take the same JSON fields as the CLI operation, with paths.
+`GET /api/usage` takes `since`, `until` and `tag`.
 
 **Video generation.** `POST /api/video/generate` takes `multipart/form-data` with these
 fields:
@@ -378,6 +505,7 @@ The base URL is the BytePlus AP-Southeast region (`ARK_BASE` in [`core/ark.js`](
 | `AI_MEDIA_STUDIO_DATA_DIR` | no | Where `gallery/`, `videos/`, `prompts/` and `.state/` live (default: this repository) |
 | `AI_MEDIA_STUDIO_ENV_FILE` | no | Which `.env` to read (default: this repository's `.env`) |
 | `AI_MEDIA_STUDIO_VERBOSE` | no | `1` makes the MCP server log to stderr |
+| `ENDPOINT_BASE_MODEL` | no | Which model `ENDPOINT_ID` serves, for pricing (default `seedream-4-5-251128`) |
 
 ### Shared state
 

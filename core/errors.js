@@ -12,6 +12,7 @@ const CODES = {
     NOT_FOUND:             { exit: 5, http: 404 },
     UPLOADS_UNAVAILABLE:   { exit: 6, http: 400 },
     WAIT_TIMEOUT:          { exit: 7, http: 504 },
+    BATCH_INCOMPLETE:      { exit: 8, http: 207 },
     DOWNLOAD_FAILED:       { exit: 1, http: 502 },
     NETWORK:               { exit: 1, http: 500 },
     CONFIG:                { exit: 1, http: 500 },

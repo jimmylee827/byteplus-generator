@@ -26,7 +26,7 @@ function models(ctx) {
     const v = videoModes(ctx.config);
     return {
         success: true,
-        image: imageCatalogue(),
+        image: imageCatalogue(ctx.config.endpointBaseModel),
         video: { models: v.models, resolutions: v.resolutions, defaultResolution: v.defaultResolution, ratios: v.ratios }
     };
 }

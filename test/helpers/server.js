@@ -90,7 +90,17 @@ async function waitForHealth(url, proc, output) {
     throw new Error(`server did not become healthy:\n${output()}`);
 }
 
-async function startServer({ env = {}, target = process.env.TEST_TARGET || 'current', dataDir: sharedDataDir, mockDir: sharedMockDir } = {}) {
+// freePort() releases the port before the server binds it, so a test file running in
+// parallel can occasionally take it first. Retry on a fresh port when startup fails.
+async function startServer(opts = {}) {
+    let lastError;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        try { return await startServerOnce(opts); } catch (e) { lastError = e; }
+    }
+    throw lastError;
+}
+
+async function startServerOnce({ env = {}, target = process.env.TEST_TARGET || 'current', dataDir: sharedDataDir, mockDir: sharedMockDir } = {}) {
     const port = await freePort();
     const mockDir = sharedMockDir || makeTmp('ams-mock-');
     let cwd, dataDir, script;
@@ -120,7 +130,12 @@ async function startServer({ env = {}, target = process.env.TEST_TARGET || 'curr
     proc.stdout.on('data', d => { out += d; });
     proc.stderr.on('data', d => { out += d; });
     const url = `http://127.0.0.1:${port}`;
-    await waitForHealth(url, proc, () => out);
+    try {
+        await waitForHealth(url, proc, () => out);
+    } catch (e) {
+        proc.kill('SIGTERM');
+        throw e;
+    }
     return {
         url,
         port,
@@ -138,12 +153,12 @@ async function startServer({ env = {}, target = process.env.TEST_TARGET || 'curr
 
 // Fields the refactor added to responses. Characterisation tests compare the legacy
 // shape, so `call` strips these from `body` and keeps the untouched response in `full`.
-const ADDED_TOP = ['code', 'terminal', 'failureReason', 'nextPollMs', 'pendingIds', 'retryable'];
+const ADDED_TOP = ['code', 'terminal', 'failureReason', 'nextPollMs', 'pendingIds', 'retryable', 'cost', 'costNote'];
 function legacyView(body) {
     if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
     const out = { ...body };
     for (const k of ADDED_TOP) delete out[k];
-    const strip = (r) => { if (r && typeof r === 'object') { const c = { ...r }; delete c.paths; return c; } return r; };
+    const strip = (r) => { if (r && typeof r === 'object') { const c = { ...r }; delete c.paths; delete c.cost; return c; } return r; };
     if (out.item) out.item = strip(out.item);
     if (out.record) out.record = strip(out.record);
     if (Array.isArray(out.items)) out.items = out.items.map(strip);

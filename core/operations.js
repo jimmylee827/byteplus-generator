@@ -17,7 +17,9 @@ const system = require('./system');
 const images = require('./images');
 const prompts = require('./prompts');
 const videos = require('./videos');
-const { loadMedia, readTextFile, resolveOutDir } = require('./media');
+const { loadMedia, readTextFile, resolveOutDir, resolvePath } = require('./media');
+const { runBatch } = require('./batch');
+const tools = require('./imagetools');
 const { present, absPath } = require('./serialize');
 
 const BILLED = 'BILLED: each call is a paid BytePlus generation. ';
@@ -69,6 +71,69 @@ async function videoCoreInput(ctx, input) {
     };
 }
 
+// Everything image generate (and each batch job) accepts.
+const generateProps = {
+    prompt: str('The prompt; may contain {{name:default}} slots. "-" reads stdin on the CLI.', { cli: { short: 'p' } }),
+    promptFile: str('Read the prompt from this file ("-" = stdin on the CLI).'),
+    fromPrompt: str('Use the current body of this saved prompt (library id).'),
+    slots: slotsProp,
+    images: {
+        type: 'array', items: { type: 'string' }, maxItems: 9,
+        description: 'Up to 9 local reference images, in order. Name what each shows with role=path (e.g. garment=a.jpg, character=b.jpg): the prompt then starts with "Image 1 is the garment; images 2 and 3 are the character." and the roles are recorded.',
+        cli: { flag: 'image', multiple: true }
+    },
+    legend: bool('Start the prompt with which named reference is which (default on when references have roles).', { cli: { negatable: true } }),
+    model: str('"endpoint" (Seedream 4.5, default) or a ModelArk model id — see `models`.'),
+    resolution: str('A resolution the model offers (default: the model default). On Seedream 5.0 Pro, 1.5K costs half of 2K.'),
+    ratio: str('Aspect ratio such as 3:4, or auto (default auto).'),
+    size: str('Exact WIDTHxHEIGHT (or a bare resolution); overrides resolution/ratio.'),
+    format: str('jpeg | png (only some models accept png).', { enum: ['jpeg', 'png'] }),
+    watermark: bool('Add the BytePlus watermark.'),
+    seed: int('Seed for a repeatable result. Refused for models without one — no current Seedream model (5.0, 4.5, 4.0) has a seed parameter.'),
+    group: int('Ask for up to N related images in one call (a consistent set). Seedream 4.5, 4.0 and 5.0 Lite only; references + N may not exceed 15. Billed per image returned.'),
+    tags: { type: 'array', items: { type: 'string' }, description: 'Tags saved on the image, for gallery list --tag, usage --tag and gallery prune --tag.', cli: { flag: 'tag', multiple: true } },
+    meta: { type: 'object', additionalProperties: { type: 'string' }, description: 'Free-form key=value metadata saved on the image.', cli: { flag: 'meta', multiple: true, kv: true } },
+    out: str('Also copy the result here: a folder, or an exact file path ending in .jpeg/.jpg/.png/.webp (a group adds -1, -2, …).'),
+    dryRun: bool('Print the exact request and its estimated cost (keys never shown) and stop — no call, no cost.')
+};
+
+// "garment=/a.jpg" → { role: 'garment', path: '/a.jpg' }; a plain path has no role.
+function parseImageRef(v) {
+    const m = /^([A-Za-z][\w-]*)=(.+)$/.exec(String(v));
+    return m ? { role: m[1], path: m[2] } : { role: null, path: String(v) };
+}
+
+async function runImageGenerate(ctx, i, { dryRun }) {
+    let prompt = i.prompt;
+    const sources = [i.prompt !== undefined, Boolean(i.promptFile), Boolean(i.fromPrompt)].filter(Boolean).length;
+    if (sources !== 1) throw new StudioError('USAGE', 'Give exactly one of --prompt, --prompt-file or --from-prompt.');
+    if (i.promptFile) prompt = await readTextFile(ctx, i.promptFile);
+    if (i.fromPrompt) prompt = await prompts.resolveTemplate(ctx, { id: i.fromPrompt });
+    const refs = [];
+    for (const v of i.images || []) {
+        const { role, path: p } = parseImageRef(v);
+        refs.push({ ...(await loadMedia(ctx, p, { allowUrl: false })), role });
+    }
+    return images.generateImage(ctx, {
+        prompt,
+        // Always compiled, as the composer does: slots left out get their defaults.
+        slots: i.slots || {},
+        model: i.model,
+        resolution: i.resolution,
+        ratio: i.ratio,
+        size: i.size,
+        outputFormat: i.format,
+        watermark: i.watermark,
+        seed: i.seed,
+        group: i.group,
+        legend: i.legend,
+        tags: i.tags,
+        meta: i.meta,
+        images: refs,
+        out: resolveOutDir(ctx, i.out)
+    }, { dryRun });
+}
+
 const timeoutProp = int('Give up waiting after this many seconds (the task keeps running; resume later).');
 
 const OPERATIONS = [
@@ -115,52 +180,110 @@ const OPERATIONS = [
     },
     {
         name: 'image.generate', tool: 'ai_media_studio_image_generate',
-        summary: BILLED + 'Generate one image with Seedream and save it to the gallery. Check the request first with a dry run.',
+        summary: BILLED + 'Generate one image (or a group of related images) with Seedream and save it to the gallery. The result includes its cost. Check the request first with a dry run.',
         hints: { openWorld: true, billed: true }, present: 'image',
+        input: obj(generateProps),
+        run: (ctx, i) => runImageGenerate(ctx, i, { dryRun: Boolean(i.dryRun) })
+    },
+    {
+        name: 'image.batch', tool: 'ai_media_studio_image_batch',
+        summary: BILLED + 'Run a file of image-generate jobs (JSON Lines, or a .json array) with a concurrency limit, an optional spend cap, and resume. Progress is kept in <file>.status.json. Dry-run it first to see the estimated spend.',
+        hints: { openWorld: true, billed: true },
         input: obj({
-            prompt: str('The prompt; may contain {{name:default}} slots. "-" reads stdin on the CLI.', { cli: { short: 'p' } }),
-            promptFile: str('Read the prompt from this file ("-" = stdin on the CLI).'),
-            fromPrompt: str('Use the current body of this saved prompt (library id).'),
-            slots: slotsProp,
-            images: { type: 'array', items: { type: 'string' }, maxItems: 9, description: 'Up to 9 local reference image paths.', cli: { flag: 'image', multiple: true } },
-            model: str('"endpoint" (Seedream 4.5, default) or a ModelArk model id — see `models`.'),
-            resolution: str('A resolution the model offers (default: the model default).'),
-            ratio: str('Aspect ratio such as 3:4, or auto (default auto).'),
-            size: str('Exact WIDTHxHEIGHT (or a bare resolution); overrides resolution/ratio.'),
-            format: str('jpeg | png (only some models accept png).', { enum: ['jpeg', 'png'] }),
-            watermark: bool('Add the BytePlus watermark.'),
-            out: str('Also copy the result into this folder.'),
-            dryRun: bool('Print the exact request (keys never shown) and stop — no call, no cost.')
-        }),
-        async run(ctx, i) {
-            let prompt = i.prompt;
-            const sources = [i.prompt !== undefined, Boolean(i.promptFile), Boolean(i.fromPrompt)].filter(Boolean).length;
-            if (sources !== 1) throw new StudioError('USAGE', 'Give exactly one of --prompt, --prompt-file or --from-prompt.');
-            if (i.promptFile) prompt = await readTextFile(ctx, i.promptFile);
-            if (i.fromPrompt) prompt = await prompts.resolveTemplate(ctx, { id: i.fromPrompt });
-            const refs = [];
-            for (const p of i.images || []) refs.push(await loadMedia(ctx, p, { allowUrl: false }));
-            return images.generateImage(ctx, {
-                prompt,
-                // Always compiled, as the composer does: slots left out get their defaults.
-                slots: i.slots || {},
-                model: i.model,
-                resolution: i.resolution,
-                ratio: i.ratio,
-                size: i.size,
-                outputFormat: i.format,
-                watermark: i.watermark,
-                images: refs,
-                out: resolveOutDir(ctx, i.out)
-            }, { dryRun: Boolean(i.dryRun) });
+            file: str('The jobs file. Each job takes the same fields as image generate, plus an optional id; relative paths are relative to the file.', { cli: { positional: true } }),
+            concurrency: int('Jobs at a time (default 4, at most 16).'),
+            maxSpend: { type: 'number', description: 'Stop before the batch\'s recorded spend (this run plus earlier resumed runs) would pass this many US dollars. Jobs with no known price are skipped when set.' },
+            resume: bool('Skip jobs already done (per the status file) or whose `out` file exists.'),
+            restart: bool('Run every job again even though the status file records some as done (pays again).'),
+            tags: { type: 'array', items: { type: 'string' }, description: 'Tags added to every image in the batch.', cli: { flag: 'tag', multiple: true } },
+            dryRun: bool('Check every job and total the estimated spend; nothing is called or paid.'),
+            jsonl: bool('Print one JSON line per finished job, then a summary line.', { cli: { only: true } })
+        }, ['file']),
+        async run(ctx, i, io = {}) {
+            const op = BY_NAME.get('image.generate');
+            const file = resolvePath(ctx, i.file);
+            return runBatch(ctx, { ...i, file }, {
+                validate: (job) => validateInput(op, job),
+                estimate: (job) => runImageGenerate(ctx, job, { dryRun: true }),
+                generate: async (job) => present.image(ctx.config, await runImageGenerate(ctx, job, { dryRun: false })),
+                onJob: io.onJob
+            });
         }
+    },
+    {
+        name: 'usage', tool: 'ai_media_studio_usage',
+        summary: 'Total image spend from the gallery: per model, with filters by date and tag. Images made before costs were recorded are priced from their model, size and inputs (marked as estimated).',
+        hints: { readOnly: true },
+        input: obj({
+            since: str('Only images from this date/time, or this long ago (30d, 12h, 2w).'),
+            until: str('Only images before this date/time, or this long ago.'),
+            tag: { type: 'array', items: { type: 'string' }, description: 'Only images with every one of these tags.', cli: { flag: 'tag', multiple: true } }
+        }),
+        run: (ctx, i) => images.usage(ctx, i)
+    },
+    {
+        name: 'image.trim', tool: 'ai_media_studio_image_trim',
+        summary: 'Crop the empty margin around the subject (local, free) — works on studio backdrops with gradients and soft shadows, not just flat colour. Reports `unchanged` when content reaches every edge. Writes <name>-trim<ext> beside the input unless --out is given.',
+        hints: {},
+        input: obj({
+            input: str('The image to trim.', { cli: { positional: true } }),
+            out: str('Where to write the result (.png/.jpg/.webp).'),
+            threshold: int('How strong an edge must be to count as subject (0–255, default 16). Raise it to trim less aggressively.'),
+            margin: { type: 'number', description: 'Breathing room kept around the subject, as a % of the long edge (default 1.5).' },
+            minContent: { type: 'number', description: 'How much of a row or column must be edges for it to hold the subject, in % (default 4).' },
+            pad: int('Extra background pixels added back around the result (default 0).'),
+            background: str('Background colour for --pad, e.g. #ffffff (default: the original corner colour).')
+        }, ['input']),
+        run: (ctx, i) => tools.trimImage({ ...i, input: resolvePath(ctx, i.input), out: i.out && resolvePath(ctx, i.out) })
+    },
+    {
+        name: 'image.tile', tool: 'ai_media_studio_image_tile',
+        summary: 'Lay images out in a grid with no gaps, e.g. a character sheet (local, free).',
+        hints: {},
+        input: obj({
+            images: { type: 'array', items: { type: 'string' }, description: 'The images, in reading order.', cli: { positional: true } },
+            out: str('The sheet to write (.png/.jpg/.webp).'),
+            columns: int('Images per row (default: all in one row).'),
+            cell: str('Cell size WIDTHxHEIGHT (default: the first image\'s size).'),
+            fit: str('contain (whole image, background around it) or cover (fill the cell, cropping).', { enum: ['contain', 'cover'] }),
+            background: str('Background colour for contain, e.g. #ffffff.')
+        }, ['images', 'out']),
+        run: (ctx, i) => tools.tileImages({ ...i, inputs: i.images.map(p => resolvePath(ctx, p)), out: resolvePath(ctx, i.out) })
+    },
+    {
+        name: 'image.compare', tool: 'ai_media_studio_image_compare',
+        summary: 'A labelled side-by-side sheet of images for human review (local, free).',
+        hints: {},
+        input: obj({
+            images: { type: 'array', items: { type: 'string' }, description: 'The images to compare.', cli: { positional: true } },
+            out: str('The sheet to write (.png/.jpg/.webp).'),
+            labels: { type: 'array', items: { type: 'string' }, description: 'One label per image (default: file names).', cli: { flag: 'label', multiple: true } },
+            height: int('Height each image is scaled to (default 640).'),
+            columns: int('Images per row (default: all in one row).')
+        }, ['images', 'out']),
+        run: (ctx, i) => tools.compareImages({ ...i, inputs: i.images.map(p => resolvePath(ctx, p)), out: resolvePath(ctx, i.out) })
     },
     {
         name: 'gallery.list', tool: 'ai_media_studio_gallery_list',
         summary: 'Past images, newest first (all history — the UI\'s panic mode does not apply here).',
         hints: { readOnly: true }, present: 'image',
-        input: obj({ search: str('Case-insensitive text to find in the prompt.'), limit: int('At most this many.') }),
+        input: obj({
+            search: str('Case-insensitive text to find in the prompt.'),
+            tag: { type: 'array', items: { type: 'string' }, description: 'Only images with every one of these tags.', cli: { flag: 'tag', multiple: true } },
+            limit: int('At most this many.')
+        }),
         run: (ctx, i) => images.listGallery(ctx, i)
+    },
+    {
+        name: 'gallery.prune', tool: 'ai_media_studio_gallery_prune',
+        summary: 'Delete gallery images by tag and/or age. A dry run unless yes is given; needs at least one filter.',
+        hints: { destructive: true }, selfConfirm: true,
+        input: obj({
+            tag: { type: 'array', items: { type: 'string' }, description: 'Only images with every one of these tags.', cli: { flag: 'tag', multiple: true } },
+            olderThan: str('Only images older than this: a duration (30d, 12h, 2w) or a date.'),
+            yes: bool('Actually delete. Without it, only report what would be deleted.')
+        }),
+        run: (ctx, i) => images.pruneGallery(ctx, i)
     },
     {
         name: 'gallery.show', tool: 'ai_media_studio_gallery_get',
@@ -370,6 +493,34 @@ const OPERATIONS = [
 
 const BY_NAME = new Map(OPERATIONS.map(op => [op.name, op]));
 
+// The subset of JSON Schema the table uses: types, required, enums, additionalProperties
+// false. Used for MCP arguments and batch jobs (the CLI coerces its own flags).
+function validateInput(op, args) {
+    const schema = op.input;
+    const props = schema.properties || {};
+    const typeOk = (s, v) => {
+        switch (s.type) {
+            case 'string': return typeof v === 'string';
+            case 'boolean': return typeof v === 'boolean';
+            case 'integer': return Number.isInteger(v);
+            case 'number': return typeof v === 'number' && Number.isFinite(v);
+            case 'array': return Array.isArray(v) && (!s.items || v.every(x => typeOk(s.items, x))) && (!s.maxItems || v.length <= s.maxItems);
+            case 'object': return Boolean(v) && typeof v === 'object' && !Array.isArray(v) &&
+                (!s.additionalProperties || typeof s.additionalProperties !== 'object' || Object.values(v).every(x => typeOk(s.additionalProperties, x)));
+            default: return true;
+        }
+    };
+    const what = (s) => (s.type === 'array' ? `an array of ${(s.items || {}).type}s${s.maxItems ? ` (at most ${s.maxItems})` : ''}` : `a ${s.type}`);
+    for (const k of Object.keys(args)) {
+        if (!props[k] || (props[k].cli && props[k].cli.only)) throw new StudioError('USAGE', `Unknown field "${k}".`);
+        if (!typeOk(props[k], args[k])) throw new StudioError('USAGE', `"${k}" must be ${what(props[k])}.`);
+        if (props[k].enum && !props[k].enum.includes(args[k])) throw new StudioError('USAGE', `"${k}" must be one of ${props[k].enum.join(', ')}.`);
+    }
+    for (const r of schema.required || []) {
+        if (args[r] === undefined) throw new StudioError('USAGE', `Missing required field "${r}".`);
+    }
+}
+
 /** Run an operation and decorate its result exactly as the HTTP route does. */
 async function runOperation(ctx, name, input = {}, io) {
     const op = BY_NAME.get(name);
@@ -378,4 +529,4 @@ async function runOperation(ctx, name, input = {}, io) {
     return present[op.present || 'plain'](ctx.config, result);
 }
 
-module.exports = { OPERATIONS, BY_NAME, runOperation };
+module.exports = { OPERATIONS, BY_NAME, runOperation, validateInput, parseImageRef };

@@ -11,6 +11,7 @@ const images = require('../core/images');
 const prompts = require('../core/prompts');
 const videos = require('../core/videos');
 const { MAX_REFERENCE_IMAGES, MAX_REFERENCE_IMAGE_BYTES } = require('../core/models');
+const { BY_NAME, runOperation, validateInput } = require('../core/operations');
 
 // Requests that arrive through the cloudflared tunnel (Cloudflare adds
 // cf-connecting-ip) exist only so BytePlus can fetch staged uploads. Everything else —
@@ -92,6 +93,25 @@ function createApp(ctx) {
         if (v === undefined || v === '' || typeof v === 'object') return v || undefined;
         try { return JSON.parse(v); } catch { throw new StudioError('VALIDATION', `${name} must be JSON.`); }
     };
+    // A list field: repeated multipart fields, a JSON array, or one value.
+    const listField = (v) => {
+        if (v === undefined || v === '') return undefined;
+        if (Array.isArray(v)) return v.map(String);
+        if (typeof v === 'string' && v.trim().startsWith('[')) return parseJsonField(v, 'list');
+        return [String(v)];
+    };
+    // Operations whose input is plain JSON (paths, not uploads) run exactly as the CLI
+    // runs them: same validation, same operation, same presenter.
+    const opRoute = (name, fromReq) => async (req, res) => {
+        try {
+            const input = fromReq(req);
+            for (const k of Object.keys(input)) if (input[k] === undefined) delete input[k];
+            validateInput(BY_NAME.get(name), input);
+            res.json(await runOperation(ctx, name, input));
+        } catch (e) {
+            sendError(res, e);
+        }
+    };
 
     // --- ROUTES ---
     app.get('/api/health', route('plain', () => system.health(ctx)));
@@ -108,11 +128,24 @@ function createApp(ctx) {
             ratio: b.ratio,
             outputFormat: b.output_format,
             watermark: b.watermark,
+            seed: b.seed,
+            group: b.group,
+            // Optional, aligned with the uploaded images: ["garment", "character", …].
+            imageRoles: parseJsonField(b.imageRoles, 'imageRoles'),
+            legend: b.legend === undefined ? undefined : !(b.legend === 'false' || b.legend === false),
+            tags: listField(b.tags),
+            meta: parseJsonField(b.meta, 'meta'),
             images: (req.files || []).map(fileOf)
         });
     }));
+    app.post('/api/image/batch', opRoute('image.batch', (req) => ({ ...req.body })));
+    app.post('/api/image/trim', opRoute('image.trim', (req) => ({ ...req.body })));
+    app.post('/api/image/tile', opRoute('image.tile', (req) => ({ ...req.body })));
+    app.post('/api/image/compare', opRoute('image.compare', (req) => ({ ...req.body })));
+    app.get('/api/usage', opRoute('usage', (req) => ({ since: req.query.since, until: req.query.until, tag: listField(req.query.tag) })));
 
-    app.get('/api/gallery', route('image', (req) => images.listGallery(ctx, { search: req.query.search, limit: req.query.limit })));
+    app.get('/api/gallery', route('image', (req) => images.listGallery(ctx, { search: req.query.search, limit: req.query.limit, tag: listField(req.query.tag) })));
+    app.post('/api/gallery/prune', opRoute('gallery.prune', (req) => ({ tag: listField((req.body || {}).tag), olderThan: (req.body || {}).olderThan, yes: (req.body || {}).yes })));
     app.get('/api/gallery/:id', route('image', (req) => images.getGalleryItem(ctx, req.params.id)));
     app.delete('/api/gallery/:id', route('plain', (req) => images.deleteGalleryItem(ctx, req.params.id)));
 

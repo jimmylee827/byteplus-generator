@@ -1,5 +1,6 @@
 // Human-readable output for each command. Only presentation lives here: the --json
 // output is the result object itself.
+const money = (c) => (c ? `US$${c.usd}` : 'unknown (no price for this model)');
 const trunc = (s, n) => { s = String(s ?? ''); return s.length <= n ? s : s.slice(0, n - 1) + '…'; };
 const oneLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 
@@ -41,9 +42,32 @@ const FORMATTERS = {
         `uploads   ${r.videoUploadsEnabled ? `via ${r.publicBaseUrl}` : 'unavailable — no public URL (pasted URLs still work)'}`
     ].join('\n'),
     size: (r) => r.size,
-    'image.generate': (r) => r.dryRun
-        ? JSON.stringify(r.request, null, 2)
-        : [r.item.paths.output, `id ${r.item.id} · ${r.item.size}${r.copiedTo ? ` · copied to ${r.copiedTo}` : ''}`].join('\n'),
+    'image.generate': (r) => {
+        if (r.dryRun) return [JSON.stringify(r.request, null, 2), `estimated cost ${money(r.estimatedCost)}`].join('\n');
+        const made = r.items || [r.item];
+        return [
+            ...made.map(it => it.paths.output),
+            `${made.length > 1 ? `group ${r.groupId} · ${made.length} of ${r.requested} images` : `id ${r.item.id} · ${r.item.size}`} · cost ${money(r.cost)}` +
+                `${r.copiedTo ? ` · copied to ${[].concat(r.copiedTo).join(', ')}` : ''}`,
+            ...(r.failures || []).map(f => `image ${f.index + 1} failed: ${f.error}`)
+        ].join('\n');
+    },
+    'image.batch': (r) => (r.dryRun
+        ? [...r.jobs.map(j => `${j.id}  ${String(j.model).padEnd(30)} ${money(j.estimatedCost)}`),
+            `${r.total} job(s), estimated US$${r.estimatedSpendUsd}${r.unpriced ? ` + ${r.unpriced} unpriced` : ''}` +
+            `${r.withinMaxSpend === null ? '' : r.withinMaxSpend ? ' — within --max-spend' : ' — OVER --max-spend'}`].join('\n')
+        : `${r.done} done, ${r.failed} failed, ${r.skipped} skipped (${r.alreadyDone} already done) · spent US$${r.spendUsd} this run, US$${r.totalSpendUsd} in total\n${r.statusFile}`),
+    usage: (r) => [
+        `${r.images} image(s) · US$${r.spendUsd}${r.estimatedUsd ? ` (US$${r.estimatedUsd} of it estimated for older images)` : ''}${r.unpriced ? ` · ${r.unpriced} unpriced` : ''}`,
+        ...r.byModel.map(m => `  ${m.model.padEnd(32)} ${String(m.images).padStart(5)} × · US$${m.usd}`),
+        `prices: ${r.prices.source} (read ${r.prices.read})`
+    ].join('\n'),
+    'gallery.prune': (r) => (r.dryRun
+        ? `Would delete ${r.matched} image(s), ${(r.bytes / 1048576).toFixed(1)} MB. Run again with --yes to delete.`
+        : `Deleted ${r.deleted} image(s), ${(r.bytes / 1048576).toFixed(1)} MB.`),
+    'image.trim': (r) => `${r.output}  ${r.width}×${r.height}`,
+    'image.tile': (r) => `${r.output}  ${r.width}×${r.height} (${r.columns}×${r.rows})`,
+    'image.compare': (r) => `${r.output}  ${r.width}×${r.height}`,
     'gallery.list': (r) => (r.items.length ? r.items.map(imageLine).join('\n') : 'No images.'),
     'gallery.show': (r) => [imageLine(r.item), r.item.paths.output, ...r.item.paths.inputs.map(p => `input ${p}`)].join('\n'),
     'gallery.path': (r) => r.path,

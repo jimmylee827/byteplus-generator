@@ -71,7 +71,16 @@ describe('MCP server', () => {
         assert.equal(byName.ai_media_studio_prompts_delete.annotations.destructiveHint, true);
         assert.equal(byName.ai_media_studio_gallery_list.annotations.readOnlyHint, true);
         assert.ok(!JSON.stringify(tools).includes('"cli"'), 'CLI-only schema hints leak into tool schemas');
-        assert.deepEqual(gen.inputSchema.properties.images, { type: 'array', items: { type: 'string' }, maxItems: 9, description: 'Up to 9 local reference image paths.' });
+        const { description, ...imagesSchema } = gen.inputSchema.properties.images;
+        assert.deepEqual(imagesSchema, { type: 'array', items: { type: 'string' }, maxItems: 9 });
+        assert.match(description, /role=path/);
+        for (const t of ['ai_media_studio_image_batch', 'ai_media_studio_usage', 'ai_media_studio_gallery_prune', 'ai_media_studio_image_trim', 'ai_media_studio_image_tile', 'ai_media_studio_image_compare']) {
+            assert.ok(byName[t], `missing tool ${t}`);
+        }
+        assert.match(byName.ai_media_studio_image_batch.description, /^BILLED/);
+        assert.equal(byName.ai_media_studio_gallery_prune.annotations.destructiveHint, true);
+        assert.ok(!byName.ai_media_studio_image_batch.inputSchema.properties.jsonl, 'CLI-only options must not be tool inputs');
+        assert.ok(gen.inputSchema.properties.seed && gen.inputSchema.properties.group && gen.inputSchema.properties.tags);
     });
 
     it('results are the same JSON as the CLI', async () => {

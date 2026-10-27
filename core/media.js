@@ -83,4 +83,4 @@ function resolveOutDir(ctx, p) {
     return resolveLocal(ctx, p);
 }
 
-module.exports = { loadMedia, readTextFile, resolveOutDir, checkAllowedPath };
+module.exports = { loadMedia, readTextFile, resolveOutDir, checkAllowedPath, resolvePath: resolveLocal };

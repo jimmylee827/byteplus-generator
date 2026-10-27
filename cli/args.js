@@ -31,6 +31,8 @@ function flagsFor(op) {
     for (const [prop, schema] of Object.entries(op.input.properties || {})) {
         const cli = schema.cli || {};
         if (cli.positional) continue;
+        // An operation that handles --yes itself (gallery prune) gets the global flag.
+        if (GLOBAL_OPTIONS[cli.flag || kebab(prop)]) continue;
         out.push({ prop, flag: cli.flag || kebab(prop), schema, cli });
     }
     return out;
@@ -100,10 +102,22 @@ function parseCommand(argv) {
         input[f.prop] = v;
     }
     const pos = positionalsFor(op);
-    if (positionals.length > pos.length) {
+    if (positionals.length > pos.length && !pos.some(p => p.schema.type === 'array')) {
         throw new StudioError('USAGE', `Unexpected argument "${positionals[pos.length]}". See \`ai-media-studio ${op.name.replace(/\./g, ' ')} --help\`.`);
     }
-    pos.forEach((p, i) => { if (positionals[i] !== undefined) input[p.prop] = coerce(p.prop, p.schema, positionals[i]); });
+    pos.forEach((p, i) => {
+        // A list positional (image tile a.png b.png …) takes every remaining argument.
+        if (p.schema.type === 'array') {
+            const rest = positionals.slice(i);
+            if (rest.length) input[p.prop] = rest.map(x => coerce(p.prop, p.schema.items || {}, x));
+        } else if (positionals[i] !== undefined) {
+            input[p.prop] = coerce(p.prop, p.schema, positionals[i]);
+        }
+    });
+    const props = op.input.properties || {};
+    for (const k of Object.keys(GLOBAL_OPTIONS)) {
+        if (props[k] && globals[k] !== undefined) input[k] = globals[k];
+    }
     if (!globals.help) {
         for (const req of op.input.required || []) {
             if (input[req] === undefined) {
@@ -118,7 +132,10 @@ function parseCommand(argv) {
 }
 
 function usageLine(op) {
-    const pos = positionalsFor(op).map(p => ((op.input.required || []).includes(p.prop) ? p.prop.toUpperCase() : `[${p.prop.toUpperCase()}]`));
+    const pos = positionalsFor(op).map(p => {
+        const name = p.schema.type === 'array' ? `${p.prop.toUpperCase().replace(/S$/, '')}…` : p.prop.toUpperCase();
+        return (op.input.required || []).includes(p.prop) ? name : `[${name}]`;
+    });
     return ['ai-media-studio', ...op.name.split('.'), ...pos, flagsFor(op).length ? '[options]' : ''].filter(Boolean).join(' ');
 }
 
@@ -162,7 +179,7 @@ function mainHelp(version) {
     }
     lines.push('Every command takes --json. Exit codes: 0 ok, 1 other error, 2 usage/validation,');
     lines.push('3 upstream rejected or task failed, 4 all keys exhausted, 5 not found,');
-    lines.push('6 uploads unavailable (no public URL), 7 wait timed out.');
+    lines.push('6 uploads unavailable (no public URL), 7 wait timed out, 8 batch incomplete.');
     lines.push('Run `ai-media-studio <command> --help` for its options.');
     return lines.join('\n');
 }

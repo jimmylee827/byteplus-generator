@@ -103,7 +103,7 @@ async function main(argv) {
         if (op.longRunning) { await runLongRunning(op, input, globals); return; }
 
         await resolveStdin(input);
-        if (op.hints && op.hints.destructive && !globals.yes) {
+        if (op.hints && op.hints.destructive && !op.selfConfirm && !globals.yes) {
             if (!process.stdin.isTTY) {
                 throw new StudioError('USAGE', `Refusing to ${op.name.replace('.', ' ')} without --yes (stdin is not a terminal).`);
             }
@@ -116,9 +116,16 @@ async function main(argv) {
         const { createContext } = require('../core/context');
         const { runOperation } = require('../core/operations');
         const ctx = createContext({ surface: 'cli', log: globals.verbose ? stderrLog : quietLog });
-        // Progress always goes to stderr (stdout carries only the result).
+        // Progress always goes to stderr (stdout carries only the result) — except with
+        // `image batch --jsonl`, whose stdout is one JSON line per job, then the summary.
+        const jsonl = Boolean(input.jsonl);
+        delete input.jsonl;
         const lastStatus = new Map();
         const io = {
+            onJob: (line) => {
+                if (jsonl) process.stdout.write(JSON.stringify(line) + '\n');
+                else process.stderr.write(`${line.id}: ${line.state}${line.cost ? ` US$${line.cost.usd}` : ''}${line.reason ? ` (${line.reason})` : ''}${line.error ? ` — ${line.error}` : ''}\n`);
+            },
             onProgress: (r) => {
                 const id = r.record && r.record.id;
                 if (lastStatus.get(id) === r.status) return;
@@ -126,8 +133,19 @@ async function main(argv) {
                 process.stderr.write(`${id}: ${r.status}\n`);
             }
         };
-        const result = await runOperation(ctx, op.name, input, io);
-        print(globals, op.name, result);
+        let result;
+        try {
+            result = await runOperation(ctx, op.name, input, io);
+        } catch (err) {
+            if (jsonl) {
+                process.stdout.write(JSON.stringify(errorEnvelope(err)) + '\n');
+                process.exitCode = asStudioError(err).exitCode;
+                return;
+            }
+            throw err;
+        }
+        if (jsonl) process.stdout.write(JSON.stringify(result) + '\n');
+        else print(globals, op.name, result);
     } catch (err) {
         fail(globals, err);
     }

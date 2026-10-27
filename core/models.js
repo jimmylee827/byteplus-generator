@@ -72,6 +72,80 @@ const UI_DEFAULT_RATIO = '3:4';
 const MAX_REFERENCE_IMAGES = 9;
 const MAX_REFERENCE_IMAGE_BYTES = 10 * 1024 * 1024;
 
+// --- PRICES ---
+// USD per image, from the official ModelArk price table:
+//   https://ai.byteplus.com/ark/region:ap-southeast-1/docs/model-pricing
+//   read 2026-10-28 (the page itself carries no date).
+// Only successfully generated images are billed. A model missing here has no known
+// price: its cost is reported as null rather than guessed.
+//   output          price per generated image
+//   outputAbove     { pixels, usd }: images with more pixels than this cost `usd`
+//   inputFromSecond price of each reference image after the first (per request)
+const PRICE_SOURCE = { url: 'https://ai.byteplus.com/ark/region:ap-southeast-1/docs/model-pricing', read: '2026-10-28' };
+const IMAGE_PRICES = {
+    // "$0.045 (up to 2.61 million pixels) or $0.09 (more than 2.61 million pixels)";
+    // input "First image: Free; from the second image: $0.003". So 1.5K is the cheap
+    // tier at most ratios, and 2K is the expensive one.
+    'dola-seedream-5-0-pro-260628': { output: 0.045, outputAbove: { pixels: 2610000, usd: 0.09 }, inputFromSecond: 0.003 },
+    'dola-seedream-5-0-flash-260915': { output: 0.018 },
+    'seedream-5-0-lite-260128': { output: 0.035 },
+    'seedream-4-5-251128': { output: 0.04 },
+    'seedream-4-0-250828': { output: 0.03 },
+    'seededit-3-0-i2i-250628': { output: 0.03 }
+};
+
+// --- WHAT EACH MODEL ACCEPTS ---
+// From the image generation API reference (last updated 2026-10-17):
+// - No current Seedream model (5.0 pro/flash/lite, 4.5, 4.0) has a `seed` parameter.
+//   The 3.0 generation (seedream-3-0-t2i, seededit-3-0-i2i) did; only those get one.
+// - Group ("sequential") generation — sequential_image_generation: "auto" with
+//   sequential_image_generation_options.max_images — is for 5.0 lite, 4.5 and 4.0,
+//   not 5.0 pro or flash. Reference images + generated images must not exceed 15.
+const MAX_IMAGES_PER_REQUEST = 15;
+function modelAcceptsSeed(modelId) {
+    return /seedream-3-0|seededit-3-0/i.test(modelId || '');
+}
+function modelSupportsGroup(modelId) {
+    return !/seedream-5-0-(pro|flash)/i.test(modelId || '') && !/seededit/i.test(modelId || '');
+}
+
+// Nominal pixel counts for a bare resolution (when the model picks the ratio).
+const NOMINAL_PIXELS = { '1K': 1024 * 1024, '1.5K': 1536 * 1536, '2K': 2048 * 2048, '4K': 4096 * 4096 };
+function pixelsOf(size) {
+    const m = /^(\d+)x(\d+)$/.exec(String(size || ''));
+    if (m) return Number(m[1]) * Number(m[2]);
+    return NOMINAL_PIXELS[size] || null;
+}
+
+const round = (n) => Math.round(n * 100000) / 100000;
+
+/**
+ * What one request costs, or null when the model has no known price.
+ * @param {string} priceModel  the model id to price (the endpoint's base model for "endpoint")
+ * @param {{ outputs: number, inputs: number, sizes: (string|null)[] }} usage
+ *        sizes: the pixel size of each output (actual after generation, requested before)
+ */
+function imageCost(priceModel, { outputs, inputs, sizes }) {
+    const p = IMAGE_PRICES[priceModel];
+    if (!p) return null;
+    let outputUsd = 0;
+    for (let i = 0; i < outputs; i++) {
+        const px = pixelsOf(sizes[i] !== undefined ? sizes[i] : sizes[0]);
+        // Unknown pixel count on a tiered model: assume the higher tier (never under-report).
+        const above = p.outputAbove && (px === null || px > p.outputAbove.pixels);
+        outputUsd += above ? p.outputAbove.usd : p.output;
+    }
+    const inputUsd = p.inputFromSecond ? Math.max(0, inputs - 1) * p.inputFromSecond : 0;
+    return {
+        usd: round(outputUsd + inputUsd),
+        outputUsd: round(outputUsd),
+        inputUsd: round(inputUsd),
+        model: priceModel,
+        outputs,
+        priceRead: PRICE_SOURCE.read
+    };
+}
+
 function modelConfig(modelKey) {
     return SEEDREAM_MODELS[modelKey || DEFAULT_IMAGE_MODEL] || SEEDREAM_MODELS.endpoint;
 }
@@ -102,22 +176,32 @@ function resolveOutputFormat(model, outputFormat) {
     return known ? known.outputFormat : null;
 }
 
+// The "endpoint" model is whatever ENDPOINT_ID serves; the catalogue labels it Seedream
+// 4.5, so that is the price used unless ENDPOINT_BASE_MODEL says otherwise.
+const ENDPOINT_BASE_MODEL = 'seedream-4-5-251128';
+
 /** The image half of `ai-media-studio models`. */
-function imageCatalogue() {
+function imageCatalogue(endpointBaseModel) {
     return {
         defaultModel: DEFAULT_IMAGE_MODEL,
         defaultRatio: UI_DEFAULT_RATIO,
         maxReferenceImages: MAX_REFERENCE_IMAGES,
         maxReferenceImageBytes: MAX_REFERENCE_IMAGE_BYTES,
         ratios: IMAGE_RATIOS,
-        models: Object.entries(SEEDREAM_MODELS).map(([id, cfg]) => ({
-            id,
-            label: cfg.label,
-            resolutions: cfg.resolutions,
-            defaultResolution: cfg.defaultResolution,
-            outputFormat: cfg.outputFormat,
-            sizes: cfg.matrix
-        })),
+        models: Object.entries(SEEDREAM_MODELS).map(([id, cfg]) => {
+            const priceModel = id === 'endpoint' ? (endpointBaseModel || ENDPOINT_BASE_MODEL) : id;
+            return {
+                id,
+                label: cfg.label,
+                resolutions: cfg.resolutions,
+                defaultResolution: cfg.defaultResolution,
+                outputFormat: cfg.outputFormat,
+                sizes: cfg.matrix,
+                accepts: { seed: modelAcceptsSeed(priceModel), group: modelSupportsGroup(priceModel) },
+                price: IMAGE_PRICES[priceModel] ? { model: priceModel, ...IMAGE_PRICES[priceModel] } : null
+            };
+        }),
+        prices: { source: PRICE_SOURCE.url, read: PRICE_SOURCE.read, usdPerImage: IMAGE_PRICES },
         // Any other ModelArk image model id is forwarded verbatim; sizes for it fall
         // back to the endpoint matrix.
         passThrough: true
@@ -126,6 +210,8 @@ function imageCatalogue() {
 
 module.exports = {
     SEEDREAM_MODELS, IMAGE_RATIOS, DEFAULT_IMAGE_MODEL, UI_DEFAULT_RATIO,
-    MAX_REFERENCE_IMAGES, MAX_REFERENCE_IMAGE_BYTES,
-    buildSize, resolveImageSize, resolveOutputFormat, imageCatalogue
+    MAX_REFERENCE_IMAGES, MAX_REFERENCE_IMAGE_BYTES, MAX_IMAGES_PER_REQUEST,
+    IMAGE_PRICES, PRICE_SOURCE, ENDPOINT_BASE_MODEL,
+    buildSize, resolveImageSize, resolveOutputFormat, imageCatalogue,
+    imageCost, pixelsOf, modelAcceptsSeed, modelSupportsGroup
 };
