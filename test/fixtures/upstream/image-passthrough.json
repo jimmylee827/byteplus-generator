@@ -1,0 +1,14 @@
+{
+  "method": "POST",
+  "url": "https://ark.ap-southeast.bytepluses.com/api/v3/images/generations",
+  "keyIndex": 0,
+  "body": {
+    "model": "seedream-4-0-250828",
+    "prompt": "pass",
+    "response_format": "url",
+    "size": "2K",
+    "watermark": false,
+    "sequential_image_generation": "disabled",
+    "stream": false
+  }
+}

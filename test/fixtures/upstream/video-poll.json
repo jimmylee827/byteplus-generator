@@ -1,0 +1,6 @@
+{
+  "method": "GET",
+  "url": "https://ark.ap-southeast.bytepluses.com/api/v3/contents/generations/tasks/<task>",
+  "keyIndex": 0,
+  "body": null
+}

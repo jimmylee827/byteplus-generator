@@ -1,0 +1,25 @@
+{
+  "method": "POST",
+  "url": "https://ark.ap-southeast.bytepluses.com/api/v3/images/generations",
+  "keyIndex": 0,
+  "body": {
+    "model": "ep-test-endpoint-0001",
+    "prompt": "nine refs",
+    "response_format": "url",
+    "size": "2K",
+    "watermark": false,
+    "sequential_image_generation": "disabled",
+    "stream": false,
+    "image": [
+      "data:image/png;base64,iVBORwECAwQ=",
+      "data:image/jpeg;base64,/9j/4AUGBwg=",
+      "data:image/png;base64,iVBORwECAwQ=",
+      "data:image/jpeg;base64,/9j/4AUGBwg=",
+      "data:image/png;base64,iVBORwECAwQ=",
+      "data:image/jpeg;base64,/9j/4AUGBwg=",
+      "data:image/png;base64,iVBORwECAwQ=",
+      "data:image/jpeg;base64,/9j/4AUGBwg=",
+      "data:image/png;base64,iVBORwECAwQ="
+    ]
+  }
+}

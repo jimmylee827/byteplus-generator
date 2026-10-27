@@ -1,0 +1,27 @@
+{
+  "method": "POST",
+  "url": "https://ark.ap-southeast.bytepluses.com/api/v3/contents/generations/tasks",
+  "keyIndex": 0,
+  "body": {
+    "model": "dreamina-seedance-2-5-260628",
+    "content": [
+      {
+        "type": "text",
+        "text": "ref"
+      },
+      {
+        "type": "image_url",
+        "image_url": {
+          "url": "https://public.example.test/videos/staging/<staged>.jpg"
+        },
+        "role": "reference_image"
+      }
+    ],
+    "resolution": "1080p",
+    "watermark": false,
+    "omni_reference_task_type": "reference",
+    "ratio": "9:16",
+    "duration": 8,
+    "generate_audio": false
+  }
+}

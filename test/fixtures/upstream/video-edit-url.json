@@ -1,0 +1,24 @@
+{
+  "method": "POST",
+  "url": "https://ark.ap-southeast.bytepluses.com/api/v3/contents/generations/tasks",
+  "keyIndex": 0,
+  "body": {
+    "model": "dreamina-seedance-2-5-260628",
+    "content": [
+      {
+        "type": "text",
+        "text": "neon night"
+      },
+      {
+        "type": "video_url",
+        "video_url": {
+          "url": "https://cdn.example/clip.mp4"
+        },
+        "role": "reference_video"
+      }
+    ],
+    "resolution": "1080p",
+    "watermark": false,
+    "omni_reference_task_type": "edit"
+  }
+}

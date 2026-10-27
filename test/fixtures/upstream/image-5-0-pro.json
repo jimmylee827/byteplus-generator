@@ -1,0 +1,13 @@
+{
+  "method": "POST",
+  "url": "https://ark.ap-southeast.bytepluses.com/api/v3/images/generations",
+  "keyIndex": 0,
+  "body": {
+    "model": "dola-seedream-5-0-pro-260628",
+    "prompt": "pro",
+    "response_format": "url",
+    "size": "1776x2368",
+    "watermark": true,
+    "output_format": "jpeg"
+  }
+}

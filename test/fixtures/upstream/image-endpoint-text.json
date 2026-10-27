@@ -1,0 +1,14 @@
+{
+  "method": "POST",
+  "url": "https://ark.ap-southeast.bytepluses.com/api/v3/images/generations",
+  "keyIndex": 0,
+  "body": {
+    "model": "ep-test-endpoint-0001",
+    "prompt": "a red fox in snow",
+    "response_format": "url",
+    "size": "1728x2304",
+    "watermark": false,
+    "sequential_image_generation": "disabled",
+    "stream": false
+  }
+}
