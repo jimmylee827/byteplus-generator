@@ -9,11 +9,27 @@ async function downloadBuffer(url) {
     return Buffer.from(await r.arrayBuffer());
 }
 
+// On Windows a rename fails with EPERM/EACCES/EBUSY while another process holds the
+// file open without delete sharing — typically antivirus or the search indexer
+// scanning a file we just wrote. The hold is brief, so retry (as graceful-fs does).
+const RENAME_RETRY_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
+async function renameRetry(from, to, { timeoutMs = 10000 } = {}) {
+    const start = Date.now();
+    for (let delay = 10; ; delay = Math.min(delay * 2, 500)) {
+        try {
+            return await fsp.rename(from, to);
+        } catch (e) {
+            if (process.platform !== 'win32' || !RENAME_RETRY_CODES.has(e.code) || Date.now() - start >= timeoutMs) throw e;
+            await new Promise(r => setTimeout(r, delay));
+        }
+    }
+}
+
 /** Write via temp file + rename, so a concurrent reader never sees a partial file. */
 async function writeFileAtomic(dest, buf) {
     const tmp = `${dest}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
     await fsp.writeFile(tmp, buf);
-    await fsp.rename(tmp, dest);
+    await renameRetry(tmp, dest);
 }
 
 async function downloadFile(url, destPath) {
@@ -46,4 +62,4 @@ function isHttpUrl(s) {
     return typeof s === 'string' && /^https?:\/\//i.test(s.trim());
 }
 
-module.exports = { downloadBuffer, downloadFile, writeFileAtomic, detectImageExt, mimeFromName, isHttpUrl };
+module.exports = { downloadBuffer, downloadFile, writeFileAtomic, renameRetry, detectImageExt, mimeFromName, isHttpUrl };

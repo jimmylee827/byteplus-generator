@@ -7,6 +7,7 @@ const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const { withLock } = require('./lock');
+const { renameRetry } = require('../files');
 
 async function readJson(file) {
     return JSON.parse(await fsp.readFile(file, 'utf-8'));
@@ -16,7 +17,7 @@ async function writeJsonAtomic(file, value) {
     const tmp = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
     await fsp.writeFile(tmp, JSON.stringify(value, null, 2));
     try {
-        await fsp.rename(tmp, file);
+        await renameRetry(tmp, file);
     } catch (e) {
         await fsp.unlink(tmp).catch(() => {});
         throw e;

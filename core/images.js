@@ -6,7 +6,7 @@ const { StudioError } = require('./errors');
 const { IMAGE_URL, rotatingFetch } = require('./ark');
 const { withLock } = require('./stores/lock');
 const { mask } = require('./config');
-const { downloadBuffer, detectImageExt, mimeFromName } = require('./files');
+const { downloadBuffer, detectImageExt, mimeFromName, renameRetry } = require('./files');
 const { compilePrompt } = require('./slots');
 const {
     resolveImageSize, resolveOutputFormat, MAX_REFERENCE_IMAGES, MAX_REFERENCE_IMAGE_BYTES, MAX_IMAGES_PER_REQUEST,
@@ -271,7 +271,7 @@ async function generateImage(ctx, input, { dryRun = false } = {}) {
                     const buf = await downloadBuffer(item.url);
                     await fsp.writeFile(partPath, buf);
                     filename = `${id}.${detectImageExt(buf)}`;
-                    await fsp.rename(partPath, path.join(config.galleryDir, filename));
+                    await renameRetry(partPath, path.join(config.galleryDir, filename));
                 } catch (e) {
                     await fsp.unlink(partPath).catch(() => {});
                     log.error('[GALLERY] Download failed:', e.message);
