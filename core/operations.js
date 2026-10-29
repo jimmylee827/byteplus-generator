@@ -477,12 +477,12 @@ const OPERATIONS = [
     {
         name: 'tunnel.up', tool: null, longRunning: true,
         summary: 'Run the tunnel (and a staging-only file server) in the foreground so CLI/MCP uploads work.',
-        input: obj({ port: int('Local port (default PORT or 3000).') })
+        input: obj({ port: int('Local port to serve staging on. Default: the running studio\'s port, else PORT, else 3000 if free, else any free port.') })
     },
     {
         name: 'serve', tool: null, longRunning: true,
         summary: 'Run the web UI and HTTP API (what `npm start` does).',
-        input: obj({ port: int('Port (default PORT or 3000).') })
+        input: obj({ port: int('Port. Default: PORT, else 3000 if free, else any free port (it prints which).') })
     },
     {
         name: 'mcp', tool: null, longRunning: true,

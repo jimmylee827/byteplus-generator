@@ -66,18 +66,10 @@ async function runLongRunning(op, input, globals) {
         return;
     }
     if (op.name === 'tunnel.up') {
-        const { getConfig } = require('../core/config');
-        const { readTunnelState } = require('../core/publicUrl');
-        const { pidAlive } = require('../core/stores/lock');
-        const config = getConfig();
-        if (!config.autoTunnel) {
-            throw new StudioError('USAGE', 'AUTO_TUNNEL=0, so the tunnel is managed by hand: set PUBLIC_BASE_URL in .env instead.');
-        }
-        const st = readTunnelState(config);
-        if (st && st.status !== 'down' && pidAlive(st.ownerPid)) {
-            throw new StudioError('USAGE', `A tunnel is already running (process ${st.ownerPid}${st.url ? `, ${st.url}` : ''}).`);
-        }
-        await require('../server/serve').run({ port: input.port, stagingOnly: true, log });
+        // runTunnelUp points the tunnel at whatever already serves videos/staging (this
+        // app's server, if running) or starts a staging-only listener on a free port.
+        // 3000 is never required.
+        await require('../server/serve').runTunnelUp({ port: input.port, log });
         return;
     }
     if (op.name === 'mcp') {

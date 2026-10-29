@@ -38,6 +38,9 @@ function buildConfig(env = process.env) {
         locksDir: path.join(stateDir, 'locks'),
         keysStateFile: path.join(stateDir, 'keys.json'),
         tunnelStateFile: path.join(stateDir, 'tunnel.json'),
+        // The port a running server actually listens on (3000 is only the default), so
+        // `tunnel up` can point at it instead of guessing.
+        serverStateFile: path.join(stateDir, 'server.json'),
 
         endpointId: env.ENDPOINT_ID || '',
         // Which model ENDPOINT_ID serves — only used to price it (core/models.js).
@@ -58,6 +61,13 @@ function buildConfig(env = process.env) {
         autoTunnel: env.AUTO_TUNNEL !== '0' && env.AUTO_TUNNEL !== 'false',
         tunnelName: env.TUNNEL_NAME || null,
         tunnelHostname: env.TUNNEL_HOSTNAME || null,
+        // A named tunnel can be started without cert.pem by UUID (its credentials file
+        // lives at ~/.cloudflared/<uuid>.json) or by token (a dashboard tunnel).
+        // Precedence: token, then UUID, then name.
+        tunnelUuid: (env.TUNNEL_UUID || '').trim() || null,
+        tunnelCredentials: env.TUNNEL_CREDENTIALS || null,
+        tunnelToken: env.TUNNEL_TOKEN || null,
+        tunnelOriginCert: env.TUNNEL_ORIGIN_CERT || null,
 
         // MCP file inputs must resolve inside one of these (core/allowlist.js).
         allowedDirs: allowed.length ? allowed : [REPO_ROOT, os.homedir()]
@@ -104,6 +114,10 @@ function describeConfig(config) {
         publicBaseUrl: config.autoTunnel ? null : (config.publicBaseUrlEnv || null),
         tunnelName: config.tunnelName,
         tunnelHostname: config.tunnelHostname,
+        tunnelUuid: config.tunnelUuid,
+        tunnelCredentials: config.tunnelCredentials,
+        tunnelToken: config.tunnelToken ? '****set' : null,
+        tunnelMethod: config.tunnelToken ? 'token' : config.tunnelUuid ? 'uuid' : config.tunnelName ? 'name' : null,
         allowedDirs: config.allowedDirs
     };
 }

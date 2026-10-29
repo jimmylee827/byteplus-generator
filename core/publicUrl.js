@@ -35,11 +35,21 @@ function readTunnelState(config) {
 function tunnelStatus(config) {
     const st = readTunnelState(config);
     const ownerAlive = Boolean(st && pidAlive(st.ownerPid));
+    const method = !config.autoTunnel ? null : config.tunnelToken ? 'token' : config.tunnelUuid ? 'uuid' : (config.tunnelName ? 'name' : 'quick');
+    // Running by name needs a real cert.pem; by UUID or token it doesn't. Say which.
+    let cert = null;
+    if (config.autoTunnel && method === 'name') {
+        try { cert = require('./tunnel').certStatus(config.tunnelOriginCert || undefined); } catch { cert = null; }
+    }
     return {
         autoTunnel: config.autoTunnel,
-        mode: config.autoTunnel ? (config.tunnelName && config.tunnelHostname ? 'named' : 'quick') : 'manual',
+        mode: config.autoTunnel ? (method === 'quick' ? 'quick' : 'named') : 'manual',
+        method,
+        ...(config.tunnelUuid ? { uuid: config.tunnelUuid } : {}),
+        ...(cert ? { cert: { ok: cert.ok, problem: cert.problem || null, path: cert.path } } : {}),
         status: !config.autoTunnel ? (config.publicBaseUrlEnv ? 'up' : 'down') : (st && ownerAlive ? st.status : 'down'),
         url: currentPublicUrl(config) || null,
+        port: st && ownerAlive ? st.port : null,
         ownerPid: st && ownerAlive ? st.ownerPid : null,
         updatedAt: st ? st.updatedAt : null
     };

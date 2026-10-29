@@ -17,26 +17,67 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const fsp = require('fs/promises');
+const os = require('os');
 const path = require('path');
 
 const URL_RE = /https:\/\/[a-z0-9][a-z0-9-]*\.trycloudflare\.com/i;
+const DEFAULT_ORIGIN_CERT = path.join(os.homedir(), '.cloudflared', 'cert.pem');
+
+// A named tunnel can be started three ways:
+//   token  — `--token` from the Cloudflare dashboard (no cert needed)
+//   uuid   — the tunnel's UUID plus its credentials file (no cert needed; the only
+//            path that works when cert.pem is missing or is not a certificate)
+//   name   — the tunnel's name, which cloudflared resolves through the API and so
+//            needs a valid cert.pem from `cloudflared tunnel login`
+function tunnelArgs({ port, method, name, uuid, credentialsFile, token }) {
+    const url = `http://localhost:${port}`;
+    if (method === 'token') return ['tunnel', '--url', url, 'run', '--token', token];
+    if (method === 'uuid') return ['tunnel', '--url', url, 'run', '--credentials-file', credentialsFile, uuid];
+    if (method === 'name') return ['tunnel', '--url', url, 'run', name];
+    return ['tunnel', '--url', url];
+}
+
+// Is cert.pem actually a cloudflared certificate? People (and some setup guides) drop
+// an API token at that path instead, which makes every name-based run fail with
+// "unauthorized" and no clue why.
+function certStatus(file = DEFAULT_ORIGIN_CERT) {
+    if (!fs.existsSync(file)) return { ok: false, problem: 'missing', path: file };
+    let head = '';
+    try { head = fs.readFileSync(file, 'utf-8').slice(0, 400); } catch { return { ok: false, problem: 'unreadable', path: file }; }
+    if (/BEGIN (ARGO TUNNEL )?CERTIFICATE/.test(head)) return { ok: true, path: file };
+    if (/BEGIN ARGO TUNNEL TOKEN/.test(head)) return { ok: false, problem: 'token', path: file };
+    return { ok: false, problem: 'unreadable', path: file };
+}
+
+const CERT_HELP = {
+    missing: 'run `cloudflared tunnel login` once',
+    token: 'that file holds an Argo Tunnel token, not a certificate — run `cloudflared tunnel login` to replace it',
+    unreadable: 'that file is not a cloudflared certificate — run `cloudflared tunnel login` to replace it'
+};
 
 class Tunnel {
     // Two modes:
     //  - quick (default): ephemeral *.trycloudflare.com hostname, throttled by
     //    Cloudflare, rotates on every reconnect. Zero setup.
-    //  - named: `name` + `hostname` run YOUR pre-created tunnel on your own domain.
-    //    The hostname is fixed and known up front, so it's published immediately
-    //    rather than scraped from stdout, and it survives every reconnect.
-    constructor({ port, envPath, writeEnv = true, log = console, name = null, hostname = null, statePath = null }) {
+    //  - named: run YOUR pre-created tunnel on your own domain. The hostname is fixed
+    //    and known up front, so it's published immediately rather than scraped from
+    //    stdout, and it survives every reconnect. Started by token, by UUID (with its
+    //    credentials file) or by name — see tunnelArgs().
+    constructor({ port, envPath, writeEnv = true, log = console, name = null, hostname = null, uuid = null,
+        credentialsFile = null, token = null, originCert = null, statePath = null }) {
         this.port = port;
         this.statePath = statePath;
         this.envPath = envPath;
         this.writeEnv = writeEnv;
         this.log = log;
         this.name = name;
+        this.uuid = uuid;
+        this.credentialsFile = credentialsFile;
+        this.token = token;
+        this.originCert = originCert || DEFAULT_ORIGIN_CERT;
+        this.method = token ? 'token' : uuid ? 'uuid' : 'name';
         this.hostname = hostname ? hostname.replace(/^https?:\/\//, '').replace(/\/+$/, '') : null;
-        this.named = Boolean(name && this.hostname);
+        this.named = Boolean(this.hostname) && (Boolean(token) || Boolean(uuid) || Boolean(name));
         this.url = null;
         this.proc = null;
         this.stopped = false;
@@ -95,6 +136,8 @@ class Tunnel {
                 status,
                 url: status === 'up' ? this.url : null,
                 mode: this.named ? 'named' : 'quick',
+                method: this.named ? this.method : 'quick',
+                ...(this.uuid ? { uuid: this.uuid } : {}),
                 ownerPid: process.pid,
                 port: this.port,
                 updatedAt: new Date().toISOString()
@@ -107,6 +150,29 @@ class Tunnel {
 
     start() {
         if (this.stopped) return;
+        // Running by name needs cloudflared to look the tunnel up through the API, which
+        // only works with a real cert.pem. Say that plainly instead of retrying an
+        // "unauthorized" loop.
+        if (this.named && this.method === 'uuid') {
+            if (!this.credentialsFile || !fs.existsSync(this.credentialsFile)) {
+                this.log.error(`[TUNNEL] cannot start named tunnel UUID ${this.uuid}: the credentials file ` +
+                    `${this.credentialsFile || '(none)'} does not exist. Set TUNNEL_CREDENTIALS to its path.`);
+                this.stopped = true;
+                this._writeState('down');
+                return;
+            }
+        }
+        if (this.named && this.method === 'name') {
+            const cert = certStatus(this.originCert);
+            if (!cert.ok) {
+                this.log.error(`[TUNNEL] cannot start named tunnel "${this.name}": ${CERT_HELP[cert.problem] || 'cert.pem is unusable'} (${cert.path}).\n` +
+                    '         Fix it with `cloudflared tunnel login`, or run the tunnel by UUID instead: ' +
+                    'set TUNNEL_UUID=<tunnel uuid> (it then uses ~/.cloudflared/<uuid>.json and needs no cert).');
+                this.stopped = true;
+                this._writeState('down');
+                return;
+            }
+        }
         this._writeState('starting');
         this._spawn();
     }
@@ -115,10 +181,11 @@ class Tunnel {
         // `tunnel run` attaches to a pre-created named tunnel and routes to the local
         // port; the hostname comes from the DNS route you set up, not from stdout.
         const args = this.named
-            ? ['tunnel', '--url', `http://localhost:${this.port}`, 'run', this.name]
-            : ['tunnel', '--url', `http://localhost:${this.port}`];
+            ? tunnelArgs({ port: this.port, method: this.method, name: this.name, uuid: this.uuid, credentialsFile: this.credentialsFile, token: this.token })
+            : tunnelArgs({ port: this.port });
+        const how = this.method === 'uuid' ? `UUID ${this.uuid}` : this.method === 'token' ? 'token' : `"${this.name}"`;
         this.log.log(this.named
-            ? `[TUNNEL] starting named tunnel "${this.name}" → https://${this.hostname}`
+            ? `[TUNNEL] starting named tunnel ${how} → https://${this.hostname}`
             : '[TUNNEL] starting cloudflared quick tunnel…');
         let proc;
         try {
@@ -159,13 +226,18 @@ class Tunnel {
 
         // Config mistakes (unknown tunnel name, missing credentials) fail the same way
         // every retry, so surface the reason instead of silently looping on backoff.
-        const FATAL_RE = /tunnel not found|Cannot determine default origin certificate|failed to find credentials|not authorized|doesn't exist/i;
+        const FATAL_RE = /tunnel not found|Cannot determine default origin certificate|failed to find credentials|not authorized|unauthorized|error parsing tunnel ID|doesn't exist/i;
         proc.stderr.on('data', (chunk) => {
             const text = String(chunk);
-            if (this.named && FATAL_RE.test(text)) {
-                this.log.error(`[TUNNEL] named tunnel "${this.name}" cannot start — check that it exists ` +
-                    `(cloudflared tunnel list) and that ~/.cloudflared holds its credentials:\n  ${text.trim().slice(0, 300)}`);
+            if (!this.named || !FATAL_RE.test(text)) return;
+            const cert = certStatus(this.originCert);
+            if (/unauthorized|error parsing tunnel ID/i.test(text) && !cert.ok) {
+                this.log.error(`[TUNNEL] cloudflared is unauthorized because ${cert.path} ${CERT_HELP[cert.problem] || 'is unusable'}.\n` +
+                    '         Either run `cloudflared tunnel login`, or set TUNNEL_UUID=<tunnel uuid> to run by UUID (no cert needed).');
+                return;
             }
+            this.log.error(`[TUNNEL] named tunnel ${how} cannot start — check that it exists ` +
+                `(cloudflared tunnel list) and that ~/.cloudflared holds its credentials:\n  ${text.trim().slice(0, 300)}`);
         });
 
         proc.on('error', (e) => {
@@ -215,4 +287,4 @@ class Tunnel {
     }
 }
 
-module.exports = { Tunnel };
+module.exports = { Tunnel, tunnelArgs, certStatus, DEFAULT_ORIGIN_CERT };

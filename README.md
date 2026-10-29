@@ -497,10 +497,12 @@ The base URL is the BytePlus AP-Southeast region (`ARK_BASE` in [`core/ark.js`](
 | `BYTEPLUS_API_KEYS` | yes | Comma-separated ARK API keys, in rotation order. Shared by images and video |
 | `VIDEO_MODEL` | no | Seedance model ID (default `dreamina-seedance-2-5-260628`) |
 | `TUNNEL_NAME` / `TUNNEL_HOSTNAME` | no | Run your own named cloudflared tunnel instead of a quick tunnel |
+| `TUNNEL_UUID` | no | Start that named tunnel **by UUID** (uses `~/.cloudflared/<uuid>.json`, needs no `cert.pem`) |
+| `TUNNEL_CREDENTIALS` / `TUNNEL_TOKEN` | no | Credentials file for a UUID run; a dashboard tunnel token (wins over UUID) |
 | `PUBLIC_BASE_URL` | no | Written by the quick tunnel as a hint; set it yourself only with `AUTO_TUNNEL=0` |
 | `AUTO_TUNNEL` | no | `0` disables the built-in tunnel supervisor |
 | `VIDEO_UPLOAD_LIMIT_MB` | no | Maximum size of one uploaded video input (default `200`) |
-| `PORT` | no | HTTP port (default `3000`) |
+| `PORT` | no | HTTP port. `3000` is only the default: if it is taken, `serve` reports and uses a free port. Setting `PORT` (or `--port`) pins one, and a busy pinned port is an error |
 | `AI_MEDIA_STUDIO_ALLOWED_DIRS` | no | Folders MCP file inputs may come from, separated by `:` (default: this repository and your home folder) |
 | `AI_MEDIA_STUDIO_DATA_DIR` | no | Where `gallery/`, `videos/`, `prompts/` and `.state/` live (default: this repository) |
 | `AI_MEDIA_STUDIO_ENV_FILE` | no | Which `.env` to read (default: this repository's `.env`) |

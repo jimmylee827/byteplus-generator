@@ -95,6 +95,8 @@ Add to `.env`:
 ```ini
 TUNNEL_NAME=byteplus-studio
 TUNNEL_HOSTNAME=byteplus.cloudflared.hk
+# Optional — see "Running by UUID" below:
+# TUNNEL_UUID=559e2f6e-...
 ```
 
 Leave `PUBLIC_BASE_URL` empty — the server sets it from `TUNNEL_HOSTNAME` at boot. (In
@@ -144,6 +146,40 @@ rm videos/staging/_speed.bin
 A quick tunnel took ~55s for 20 MB. Expect a few seconds here.
 
 ---
+
+## Running by UUID (when cert.pem is unusable)
+
+A named tunnel can be started three ways, and `ai-media-studio tunnel status` says
+which one is in use:
+
+| Method | Set | Needs `cert.pem`? |
+|---|---|---|
+| `name` | `TUNNEL_NAME` + `TUNNEL_HOSTNAME` | **yes** — cloudflared looks the name up through the API |
+| `uuid` | the two above + `TUNNEL_UUID` | no — it uses `~/.cloudflared/<uuid>.json` |
+| `token` | `TUNNEL_HOSTNAME` + `TUNNEL_TOKEN` | no |
+
+`TUNNEL_CREDENTIALS` overrides the credentials file path.
+
+Running by name fails with `error parsing tunnel ID: ... unauthorized` when
+`~/.cloudflared/cert.pem` is missing or is not actually a certificate. That file must
+start with `-----BEGIN ARGO TUNNEL CERTIFICATE-----`. Some setup guides (and the
+Cloudflare dashboard's "token" screen) put **`-----BEGIN ARGO TUNNEL TOKEN-----`**
+there instead; a token like that authenticates nothing for `cloudflared tunnel run
+<name>`, and `cloudflared tunnel list` fails with `REST request failed: unauthorized`
+too.
+
+Two fixes:
+
+1. **Restore the certificate** — `cloudflared tunnel login` (a browser opens; pick the
+   zone that owns the hostname). This overwrites `cert.pem`, so back it up first if
+   other tunnels depend on it.
+2. **Run by UUID** — no cert needed. Find the tunnel's UUID (from
+   `cloudflared tunnel list` once the cert works, or from the credentials file whose
+   tunnel serves the hostname) and set `TUNNEL_UUID=…`. Any hostname this file routes
+   keeps working; nothing else changes.
+
+The supervisor detects a token-instead-of-certificate at startup and says so, rather
+than retrying an opaque `unauthorized` loop.
 
 ## Lifecycle
 
